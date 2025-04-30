@@ -127,3 +127,103 @@ func TestStorageConfig_ValidateAddress(t *testing.T) {
 		r.Error(s.Init())
 	})
 }
+
+func TestBucketMappingValidation(t *testing.T) {
+	r := require.New(t)
+
+	mainStorage := Storage{
+		IsMain:      true,
+		Address:     "mainAddress",
+		Provider:    "p",
+		Credentials: map[string]CredentialsV4{"user": {"1", "2"}},
+	}
+
+	t.Run("Invalid - Missing Storage Name", func(t *testing.T) {
+		s := StorageConfig{
+			Storages: map[string]Storage{
+				"main": mainStorage,
+				"a":    {IsMain: false, Address: "a", Provider: "p", Credentials: map[string]CredentialsV4{"user": {"1", "2"}}},
+			},
+			BucketMapping: map[string]map[string]string{
+				"": {"sourceBucket": "destBucket"},
+			},
+		}
+		err := s.Init()
+		r.Error(err)
+		r.Contains(err.Error(), "bucket name is missing")
+	})
+
+	t.Run("Invalid - Undefined Storage", func(t *testing.T) {
+		s := StorageConfig{
+			Storages: map[string]Storage{
+				"main": mainStorage,
+				"a":    {IsMain: false, Address: "a", Provider: "p", Credentials: map[string]CredentialsV4{"user": {"1", "2"}}},
+			},
+			BucketMapping: map[string]map[string]string{
+				"missingStorage": {"sourceBucket": "destBucket"},
+			},
+		}
+		err := s.Init()
+		r.Error(err)
+		r.Contains(err.Error(), "storage missingStorage is not defined")
+	})
+
+	t.Run("Invalid - Main Storage", func(t *testing.T) {
+		s := StorageConfig{
+			Storages: map[string]Storage{
+				"main": mainStorage,
+			},
+			BucketMapping: map[string]map[string]string{
+				"main": {"sourceBucket": "destBucket"},
+			},
+		}
+		err := s.Init()
+		r.Error(err)
+		r.Contains(err.Error(), "storage main is the main storage")
+	})
+
+	t.Run("Invalid - Missing Destination Bucket", func(t *testing.T) {
+		s := StorageConfig{
+			Storages: map[string]Storage{
+				"main": mainStorage,
+				"a":    {IsMain: false, Address: "a", Provider: "p", Credentials: map[string]CredentialsV4{"user": {"1", "2"}}},
+			},
+			BucketMapping: map[string]map[string]string{
+				"a": {"sourceBucket": ""},
+			},
+		}
+		err := s.Init()
+		r.Error(err)
+		r.Contains(err.Error(), "source or destination bucket name is missing")
+	})
+
+	t.Run("Invalid - Missing Source Bucket", func(t *testing.T) {
+		s := StorageConfig{
+			Storages: map[string]Storage{
+				"main": mainStorage,
+				"a":    {IsMain: false, Address: "a", Provider: "p", Credentials: map[string]CredentialsV4{"user": {"1", "2"}}},
+			},
+			BucketMapping: map[string]map[string]string{
+				"a": {"": "destBucket"},
+			},
+		}
+		err := s.Init()
+		r.Error(err)
+		r.Contains(err.Error(), "source or destination bucket name is missing")
+	})
+
+	t.Run("Valid - Proper Bucket Mapping", func(t *testing.T) {
+		s := StorageConfig{
+			Storages: map[string]Storage{
+				"main": mainStorage,
+				"a":    {IsMain: false, Address: "a", Provider: "p", Credentials: map[string]CredentialsV4{"user": {"1", "2"}}},
+			},
+			BucketMapping: map[string]map[string]string{
+				"a": {"sourceBucket": "destBucket"},
+			},
+		}
+		err := s.Init()
+		r.NoError(err)
+	})
+
+}

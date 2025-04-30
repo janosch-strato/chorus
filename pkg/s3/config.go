@@ -1,5 +1,6 @@
 /*
  * Copyright © 2023 Clyso GmbH
+ * Copyright © 2025 STRATO GmbH
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,12 +33,14 @@ const (
 )
 
 type StorageConfig struct {
-	DefaultRegion     string             `yaml:"defaultRegion"`
-	Storages          map[string]Storage `yaml:"storages"`
-	CreateRouting     bool               `yaml:"createRouting"`
-	CreateReplication bool               `yaml:"createReplication"`
-
-	storageList []string
+	DefaultRegion         string                       `yaml:"defaultRegion"`
+	Storages              map[string]Storage           `yaml:"storages"`
+	CreateRouting         bool                         `yaml:"createRouting"`
+	CreateReplication     bool                         `yaml:"createReplication"`
+	OnDemandReplication   bool                         `yaml:"onDemandReplication"`
+	IgnoreUnmappedBuckets bool                         `yaml:"ignoreUnmappedBuckets"`
+	BucketMapping         map[string]map[string]string `yaml:"bucketMapping"`
+	storageList           []string
 }
 
 type Storage struct {
@@ -185,6 +188,25 @@ func (s *StorageConfig) Init() error {
 		return storList[i] < storList[j]
 	})
 	s.storageList = storList
+
+	// validate bucket mapping
+	for storageName, bucketMapping := range s.BucketMapping {
+		if len(storageName) == 0 {
+			return fmt.Errorf("%w: invalid bucket mapping: bucket name is missing", dom.ErrInvalidStorageConfig)
+		}
+		storage, ok := s.Storages[storageName]
+		if !ok {
+			return fmt.Errorf("%w: invalid bucket mapping: storage %s is not defined", dom.ErrInvalidStorageConfig, storageName)
+		}
+		if storage.IsMain {
+			return fmt.Errorf("%w: invalid bucket mapping: storage %s is the main storage", dom.ErrInvalidStorageConfig, storageName)
+		}
+		for sourceName, dstName := range bucketMapping {
+			if len(sourceName) == 0 || len(dstName) == 0 {
+				return fmt.Errorf("%w: invalid bucket mapping for %s: source or destination bucket name is missing", dom.ErrInvalidStorageConfig, storageName)
+			}
+		}
+	}
 
 	return nil
 }

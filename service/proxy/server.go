@@ -97,7 +97,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 	inspector := asynq.NewInspector(queueRedis)
 	defer inspector.Close()
 	queueSvc := tasks.NewQueueService(inspector)
-	policySvc := policy.NewService(confRedis, queueSvc)
+	policySvc := policy.NewService(confRedis, queueSvc, conf.Storage)
 
 	metricsSvc := metrics.NewS3Service(conf.Metrics.Enabled)
 
