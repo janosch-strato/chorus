@@ -1,5 +1,6 @@
 /*
  * Copyright © 2024 Clyso GmbH
+ * Copyright © 2025 STRATO GmbH
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +23,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -52,10 +52,8 @@ func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsS
 		cred:       conf.Credentials[user],
 		metricsSvc: metricsSvc,
 	}
-	host := strings.TrimPrefix(conf.Address, "http://")
-	host = strings.TrimPrefix(host, "https://")
 
-	mc, err := mclient.New(host, &mclient.Options{
+	mc, err := mclient.New(conf.Address.Value(), &mclient.Options{
 		Creds:  credentials.NewStaticV4(c.cred.AccessKeyID, c.cred.SecretAccessKey, ""),
 		Secure: conf.IsSecure,
 	})
@@ -91,14 +89,7 @@ func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsS
 		return nil, err
 	}
 	c.aws = awsClient
-	snsEndpoint := conf.Address
-	if !strings.HasPrefix(snsEndpoint, "http") {
-		if conf.IsSecure {
-			snsEndpoint = "https://" + snsEndpoint
-		} else {
-			snsEndpoint = "http://" + snsEndpoint
-		}
-	}
+	snsEndpoint := conf.Address.GetEndpoint(conf.IsSecure)
 
 	c.sns = sns.NewFromConfig(aws.Config{
 		Region:      "default",
@@ -200,10 +191,9 @@ func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err 
 
 	var newReq *http.Request
 	url := *req.URL
-	host := strings.TrimPrefix(c.conf.Address, "http://")
-	host = strings.TrimPrefix(host, "https://")
-	url.Host = host
-
+	// todo: support virtual host
+	// see: github.com/minio/minio-go/v7@v7.0.52/api.go:890
+	url.Host = c.conf.Address.Value()
 	url.Scheme = "http"
 	if c.conf.IsSecure {
 		url.Scheme = "https"
