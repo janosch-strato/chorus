@@ -187,13 +187,16 @@ func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err 
 	}()
 
 	// Parse bucket and object using the s3 package helper
-	bucket, object := s3.ParseBucketAndObject(req)
+	bucket, object, bucketInHostname := s3.ParseBucketAndObject(req, c.conf.Domains)
 
+	url := req.URL
 	var newReq *http.Request
-	url := *req.URL
-	// todo: support virtual host
-	// see: github.com/minio/minio-go/v7@v7.0.52/api.go:890
-	url.Host = c.conf.Address.Value()
+
+	if bucketInHostname {
+		url.Host = bucket + "." + c.conf.Address.Value()
+	} else {
+		url.Host = c.conf.Address.Value()
+	}
 	url.Scheme = "http"
 	if c.conf.IsSecure {
 		url.Scheme = "https"

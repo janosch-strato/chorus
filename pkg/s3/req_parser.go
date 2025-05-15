@@ -1,5 +1,6 @@
 /*
  * Copyright © 2023 Clyso GmbH
+ * Copyright © 2025 STRATO GmbH
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,24 +24,43 @@ import (
 
 // ParseBucketAndObject extracts bucket and object from the request based on hostname and path
 // Returns bucket, object, and whether bucket was found in hostname (virtual host style)
-func ParseBucketAndObject(r *http.Request) (bucket string, object string) {
+func ParseBucketAndObject(r *http.Request, domains []ConfAddr) (bucket string, object string, bucketInHostname bool) {
 	path := strings.TrimPrefix(r.URL.Path, "/")
-	parts := strings.SplitN(path, "/", 2)
-	bucket = parts[0]
-	if bucket == "" {
-		bucket = r.Header.Get("x-amz-bucket")
+
+	// check for bucket in hostname ("virtual host")
+	hostParts := strings.SplitN(r.Host, ".", 2)
+	bucketHostname := false
+	for _, dom := range domains {
+		if hostParts[1] == dom.Value() {
+			bucketHostname = true
+			bucket = hostParts[0]
+			object = path
+			break
+		}
 	}
 
-	if len(parts) == 2 {
-		object = parts[1]
+	if !bucketHostname {
+		parts := strings.SplitN(path, "/", 2)
+		bucket = parts[0]
+		if bucket == "" {
+			bucket = r.Header.Get("x-amz-bucket")
+		}
+		if len(parts) == 2 {
+			object = parts[1]
+		}
 	}
-
 	return
 }
 
-func ParseReq(r *http.Request) (bucket string, object string, method Method) {
+func ParseReq(r *http.Request, conf *StorageConfig) (bucket string, object string, method Method) {
+	// Extract domains from all storages for bucket/object parsing
+	var allDomains []ConfAddr
+	for _, storage := range conf.Storages {
+		allDomains = append(allDomains, storage.Domains...)
+	}
+
+	bucket, object, _ = ParseBucketAndObject(r, allDomains)
 	query := r.URL.Query()
-	bucket, object = ParseBucketAndObject(r)
 
 	switch {
 	case query.Has("lifecycle") && bucket != "":
