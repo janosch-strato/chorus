@@ -109,13 +109,12 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 
 	routeSvc := router.NewRouter(s3Clients, taskClient, verSvc, policySvc, storageSvc, limiter)
 	replSvc := replication.New(taskClient, verSvc, policySvc)
-	proxyMux := router.Serve(routeSvc, replSvc)
+	handler := router.Serve(routeSvc, replSvc)
 	authCheck := auth.Middleware(conf.Auth, conf.Storage.Storages)
-	var handler http.Handler
 	if conf.Metrics.Enabled {
-		handler = log.HttpMiddleware(conf.Log, app.App, app.AppID, router.Middleware(trace.HttpMiddleware(tp, metrics.ProxyMiddleware(authCheck.Wrap(proxyMux)))))
+		handler = log.HttpMiddleware(conf.Log, app.App, app.AppID, router.Middleware(trace.HttpMiddleware(tp, metrics.ProxyMiddleware(authCheck.Wrap(handler)))))
 	} else {
-		handler = log.HttpMiddleware(conf.Log, app.App, app.AppID, router.Middleware(trace.HttpMiddleware(tp, authCheck.Wrap(proxyMux))))
+		handler = log.HttpMiddleware(conf.Log, app.App, app.AppID, router.Middleware(trace.HttpMiddleware(tp, authCheck.Wrap(handler))))
 	}
 	handler = cors.HttpMiddleware(conf.Cors, handler)
 
