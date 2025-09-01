@@ -350,6 +350,12 @@ func NewReplicationTask[T ReplicationTask](ctx context.Context, replicationID en
 		return nil, fmt.Errorf("%w: unknown task type %T", dom.ErrInvalidArg, p)
 	}
 
+	// Even though the internal asynq task presentation allows infinite tasks by setting the timeout
+	// to 0 (see asynqs TaskMessage struct in internal/base/base.go), asynq.NewTask() prevents this
+	// by setting a default timeout of 30 minutes if no deadline and  a timeout of 0 is configured.
+	// Since golangs time.Duration has no value for infinity, we just set  a timeout of 100 years here,
+	// which is most likely long enough for most tasks.
+	optionList = append(optionList, asynq.Timeout(100*24*365*time.Hour))
 	return asynq.NewTask(taskType, bytes, optionList...), nil
 }
 
