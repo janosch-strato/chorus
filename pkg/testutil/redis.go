@@ -22,44 +22,46 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/clyso/chorus/pkg/s3"
 )
 
 var (
-	extRedisAddr string
+	extRedisAddr s3.ConfAddr
 	useExtRedis  bool
 )
 
 func init() {
 	useExtRedis, _ = strconv.ParseBool(os.Getenv("EXT_REDIS"))
 	if env := os.Getenv("EXT_REDIS_ADDR"); env != "" {
-		extRedisAddr = env
+		extRedisAddr = s3.NewConfAddr(env)
 	} else {
-		extRedisAddr = "localhost:6379"
+		extRedisAddr = s3.NewConfAddr("localhost:6379")
 	}
 }
 
-func SetupRedisAddr(t testing.TB) string {
+func SetupRedisAddr(t testing.TB) s3.ConfAddr {
 	t.Helper()
 	if useExtRedis {
-		client := redis.NewClient(&redis.Options{Addr: extRedisAddr})
+		client := redis.NewClient(&redis.Options{Addr: extRedisAddr.Value()})
 		err := client.FlushAll(context.Background()).Err()
 		if err != nil {
-			t.Fatalf("setup: failed to redis.FlushAll %s: %v", extRedisAddr, err)
+			t.Fatalf("setup: failed to redis.FlushAll %s: %v", extRedisAddr.Value(), err)
 		}
 		return extRedisAddr
 	} else {
 		db := miniredis.RunT(t)
-		return db.Addr()
+		return s3.NewConfAddr(db.Addr())
 	}
 }
 
 func SetupRedis(t testing.TB) (client redis.UniversalClient) {
 	t.Helper()
 	if useExtRedis {
-		client = redis.NewClient(&redis.Options{Addr: extRedisAddr, DB: 15})
+		client = redis.NewClient(&redis.Options{Addr: extRedisAddr.Value(), DB: 15})
 		err := client.FlushDB(context.Background()).Err()
 		if err != nil {
-			t.Fatalf("setup: failed to redis.FlushAll %s: %v", extRedisAddr, err)
+			t.Fatalf("setup: failed to redis.FlushAll %s: %v", extRedisAddr.Value(), err)
 		}
 	} else {
 		db := miniredis.RunT(t)

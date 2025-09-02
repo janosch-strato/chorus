@@ -184,7 +184,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 				taskLogger.Warn().Err(err).Msg("process task failed. task will be retried")
 			}),
 			Logger:                     stdLogger,
-			LogLevel:                   asynq.LogLevel(zerolog.GlobalLevel() + 1),
+			LogLevel:                   asynq.LogLevel(zerolog.GlobalLevel()),
 			Queues:                     tasks.Priority,
 			StrictPriority:             true,
 			DynamicQueues:              true,
