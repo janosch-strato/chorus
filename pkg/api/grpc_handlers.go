@@ -464,7 +464,7 @@ func (h *handlers) AddReplication(ctx context.Context, req *pb.AddReplicationReq
 				ToStorage:   req.To,
 				ToBucket:    bucket,
 			}
-			err = h.policySvc.AddBucketReplicationPolicy(ctx, replicationID, req.AgentUrl)
+			_, err = h.policySvc.AddBucketReplicationPolicy(ctx, replicationID, req.AgentUrl)
 			if err != nil {
 				if errors.Is(err, dom.ErrAlreadyExists) {
 					continue
@@ -534,7 +534,7 @@ func (h *handlers) addUserReplication(ctx context.Context, req *pb.AddReplicatio
 			ToStorage:   req.To,
 			ToBucket:    bucket.Name,
 		}
-		err = h.policySvc.AddBucketReplicationPolicy(ctx, replicationID, nil)
+		_, err = h.policySvc.AddBucketReplicationPolicy(ctx, replicationID, nil)
 		if err != nil {
 			if errors.Is(err, dom.ErrAlreadyExists) {
 				continue
@@ -830,7 +830,7 @@ func (h *handlers) AddBucketReplication(ctx context.Context, req *pb.AddBucketRe
 			ToBucket:    req.ToBucket,
 		}
 		// create policy:
-		err = h.policySvc.AddBucketReplicationPolicy(ctx, replicationID, req.AgentUrl)
+		_, err = h.policySvc.AddBucketReplicationPolicy(ctx, replicationID, req.AgentUrl)
 		if err != nil {
 			return err
 		}

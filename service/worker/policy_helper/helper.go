@@ -1,5 +1,6 @@
 /*
  * Copyright © 2023 Clyso GmbH
+ * Copyright © 2025 STRATO GmbH
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +22,7 @@ import (
 	"errors"
 
 	"github.com/hibiken/asynq"
+	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
 
 	xctx "github.com/clyso/chorus/pkg/ctx"
@@ -34,6 +36,7 @@ import (
 
 func CreateMainFollowerPolicies(
 	ctx context.Context,
+	logger *zerolog.Logger,
 	conf s3.StorageConfig,
 	clients s3client.Service,
 	policySvc policy.Service,
@@ -52,7 +55,7 @@ func CreateMainFollowerPolicies(
 			for _, to := range conf.Followers() {
 				toCopy := to
 				g.Go(func() error {
-					return createReplication(ctx, clients, policySvc, taskClient, user, conf.Main(), toCopy)
+					return createReplication(ctx, logger, clients, policySvc, taskClient, user, conf.Main(), toCopy)
 				})
 			}
 		}
@@ -78,10 +81,12 @@ func createRouting(
 
 func createReplication(
 	ctx context.Context,
+	logger *zerolog.Logger,
 	clients s3client.Service,
 	policySvc policy.Service,
 	taskClient *asynq.Client,
 	user, from, to string) error {
+
 	_, err := policySvc.GetUserReplicationPolicies(ctx, user)
 	if err == nil {
 		// already exists
@@ -90,6 +95,24 @@ func createReplication(
 	if !errors.Is(err, dom.ErrNotFound) {
 		return err
 	}
+	var bucketMapping map[string]string
+	ignoreUnmapped := false
+	onDemandReplication := false
+	if policySvc.Config() != nil {
+		ignoreUnmapped = policySvc.Config().IgnoreUnmappedBuckets
+		onDemandReplication = policySvc.Config().OnDemandReplication
+		toBucketMapping, found := policySvc.Config().BucketMapping[to]
+		if ignoreUnmapped && !found {
+			logger.Debug().Str("to", to).Msg("ignoring unmapped destination storage")
+			return nil
+		}
+		if found {
+			bucketMapping = toBucketMapping
+		} else {
+			bucketMapping = make(map[string]string)
+		}
+	}
+
 	policy := entity.NewUserReplicationPolicy(from, to)
 	err = policySvc.AddUserReplicationPolicy(ctx, user, policy)
 	if err != nil {
@@ -97,6 +120,10 @@ func createReplication(
 			return nil
 		}
 		return err
+	}
+
+	if onDemandReplication {
+		return nil
 	}
 	ctx = xctx.SetUser(ctx, user)
 	client, err := clients.GetByName(ctx, from)
@@ -107,15 +134,26 @@ func createReplication(
 	if err != nil {
 		return err
 	}
+
 	for _, bucket := range buckets {
+		toBucket, found := bucketMapping[bucket.Name]
+		if ignoreUnmapped && !found {
+			logger.Debug().Str("bucket", bucket.Name).Msg("ignoring unmapped bucket")
+			continue
+		}
+		if !found {
+			toBucket = bucket.Name
+		}
+		logger.Debug().Str("bucket", bucket.Name).Str("from", from).Str("to", to).Str("toBucket", toBucket).Msg("replicating bucket")
+
 		replicationID := entity.ReplicationStatusID{
 			User:        user,
 			FromStorage: from,
 			FromBucket:  bucket.Name,
 			ToStorage:   to,
-			ToBucket:    bucket.Name,
+			ToBucket:    toBucket,
 		}
-		err = policySvc.AddBucketReplicationPolicy(ctx, replicationID, nil)
+		_, err = policySvc.AddBucketReplicationPolicy(ctx, replicationID, nil)
 		if err != nil {
 			if errors.Is(err, dom.ErrAlreadyExists) {
 				continue
@@ -126,7 +164,7 @@ func createReplication(
 			Sync: tasks.Sync{
 				FromStorage: from,
 				ToStorage:   to,
-				ToBucket:    bucket.Name,
+				ToBucket:    toBucket,
 			},
 			Bucket: bucket.Name,
 		})
