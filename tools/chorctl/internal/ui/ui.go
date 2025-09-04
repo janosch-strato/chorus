@@ -244,14 +244,13 @@ func (u *UI) updateTable(changeSelection bool) {
 		for i := range u.data {
 			d := u.data[i]
 			p := 0.0
-			if d.InitBytesListed != 0 {
-				p = float64(d.InitBytesDone) / float64(d.InitBytesListed)
+			if d.InitObjListed != 0 {
+				p = float64(d.InitObjDone) / float64(d.InitObjListed)
 			}
-			bytes := fmt.Sprintf("%s/%s", api.ByteCountIEC(d.InitBytesDone), api.ByteCountIEC(d.InitBytesListed))
 			objects := fmt.Sprintf("%d/%d", d.InitObjDone, d.InitObjListed)
 			events := fmt.Sprintf("%d/%d", d.EventsDone, d.Events)
 
-			rows[i] = table.Row{u.replNameBuilder(d), api.ToPercentage(p), bytes, objects, events, fmt.Sprintf("%v", d.IsPaused), api.DateToAge(d.CreatedAt)}
+			rows[i] = table.Row{u.replNameBuilder(d), api.ToPercentage(p), fmt.Sprintf("%v", d.IsInitDone), objects, events, fmt.Sprintf("%v", d.IsPaused), api.DateToAge(d.CreatedAt)}
 
 			updateLen(maxLen, rows[i])
 
@@ -260,7 +259,7 @@ func (u *UI) updateTable(changeSelection bool) {
 		columns = []table.Column{
 			{Title: "Name", Width: maxLen[0]},
 			{Title: "Progress", Width: maxLen[1]},
-			{Title: "Bytes", Width: maxLen[2]},
+			{Title: "Done", Width: maxLen[2]},
 			{Title: "Objects", Width: maxLen[3]},
 			{Title: "Events", Width: maxLen[4]},
 			{Title: "Paused", Width: maxLen[5]},
