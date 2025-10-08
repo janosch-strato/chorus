@@ -17,13 +17,18 @@
 
 package api
 
+import (
+	"github.com/clyso/chorus/pkg/api/status"
+)
+
 type Config struct {
-	Enabled             bool   `yaml:"enabled"`
-	GrpcPort            int    `yaml:"grpcPort"`
-	HttpPort            int    `yaml:"httpPort"`
-	Secure              bool   `yaml:"secure"`
-	GrpcTLSCertFile     string `yaml:"grpcCertFile"`
-	GrpcTLSKeyFile      string `yaml:"grpcKeyFile"`
-	GrpcTLSClientAuth   bool   `yaml:"grpcClientAuth"`
-	GrpcTLSClientCAFile string `yaml:"grpcClientCAFile"`
+	Enabled             bool          `yaml:"enabled"`
+	GrpcPort            int           `yaml:"grpcPort"`
+	HttpPort            int           `yaml:"httpPort"`
+	Secure              bool          `yaml:"secure"`
+	GrpcTLSCertFile     string        `yaml:"grpcCertFile"`
+	GrpcTLSKeyFile      string        `yaml:"grpcKeyFile"`
+	GrpcTLSClientAuth   bool          `yaml:"grpcClientAuth"`
+	GrpcTLSClientCAFile string        `yaml:"grpcClientCAFile"`
+	Status              status.Config `yaml:"status,omitempty"`
 }

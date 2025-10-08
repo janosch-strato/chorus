@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
@@ -31,6 +32,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/clyso/chorus/pkg/api"
+	"github.com/clyso/chorus/pkg/api/status"
 	"github.com/clyso/chorus/pkg/dom"
 	"github.com/clyso/chorus/pkg/features"
 	"github.com/clyso/chorus/pkg/log"
@@ -264,6 +266,23 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 		}
 
 		logger.Info().Msg("management api created")
+
+		if conf.Api.Status.Enabled {
+			logger.Info().Str("prefix", conf.Api.Status.Prefix).Str("statuspath", conf.Api.Status.StatusPath).Msg("setting up status api")
+			handler, err := status.Handler(conf.Api.Status, logger, handlers, policySvc)
+			if err != nil {
+				return err
+			}
+			statusSrv := &http.Server{Addr: fmt.Sprintf("0.0.0.0:%d", conf.Api.Status.Port), Handler: handler}
+			err = server.Add("status_api",
+				func(_ context.Context) error { return statusSrv.ListenAndServe() },
+				func(ctx context.Context) error { return statusSrv.Shutdown(ctx) },
+			)
+			if err != nil {
+				return err
+			}
+		}
+
 	}
 
 	if conf.Metrics.Enabled {

@@ -49,7 +49,6 @@ func GRPCGateway(ctx context.Context, conf *Config, register RegisterHandlersFun
 	if err != nil {
 		return nil, nil, err
 	}
-
 	withCors := cors.New(cors.Options{
 		AllowOriginFunc:  func(origin string) bool { return true },
 		AllowedMethods:   []string{"GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"},
@@ -61,6 +60,7 @@ func GRPCGateway(ctx context.Context, conf *Config, register RegisterHandlersFun
 
 	handler := wsproxy.WebsocketProxy(withCors)
 	srv := &http.Server{Addr: fmt.Sprintf("0.0.0.0:%d", conf.HttpPort)}
+
 	srv.Handler = handler
 
 	start = func(_ context.Context) error {
