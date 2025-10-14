@@ -32,7 +32,7 @@ func Test_policySvc_UserRoutingPolicy(t *testing.T) {
 	c := testutil.SetupRedis(t)
 	ctx := context.TODO()
 
-	svc := NewService(c, nil)
+	svc := NewService(c, nil, nil)
 
 	u1, u2 := "u1", "u2"
 	users := []string{u1, u2}
@@ -188,7 +188,7 @@ func Test_policySvc_BucketReplicationPolicies(t *testing.T) {
 
 	queuesMock := &tasks.QueueServiceMock{}
 	tasks.Reset(queuesMock)
-	svc := NewService(c, queuesMock)
+	svc := NewService(c, queuesMock, nil)
 
 	u1, u2 := "u1", "u2"
 	users := []string{u1, u2}
@@ -266,9 +266,9 @@ func Test_policySvc_BucketReplicationPolicies(t *testing.T) {
 		}
 
 		for _, replicationID := range wrongReplicationIDs {
-			err = svc.AddBucketReplicationPolicy(ctx, replicationID, nil)
+			_, err = svc.AddBucketReplicationPolicy(ctx, replicationID, nil)
 			r.ErrorIs(err, dom.ErrInvalidArg)
-			err = svc.AddBucketReplicationPolicy(ctx, replicationID, nil)
+			_, err = svc.AddBucketReplicationPolicy(ctx, replicationID, nil)
 			r.ErrorIs(err, dom.ErrInvalidArg)
 			_, err = svc.GetReplicationPolicyInfo(ctx, replicationID)
 			r.ErrorIs(err, dom.ErrInvalidArg)
@@ -278,7 +278,7 @@ func Test_policySvc_BucketReplicationPolicies(t *testing.T) {
 			r.ErrorIs(err, dom.ErrInvalidArg)
 		}
 
-		err = svc.AddBucketReplicationPolicy(ctx, rightReplicationID, nil)
+		_, err = svc.AddBucketReplicationPolicy(ctx, rightReplicationID, nil)
 		r.NoError(err)
 		queuesMock.InitReplicationInProgress(rightReplicationID)
 		_, err = svc.GetReplicationPolicyInfo(ctx, rightReplicationID)
@@ -435,7 +435,7 @@ func Test_policySvc_BucketReplicationPolicies(t *testing.T) {
 		r.NoError(err)
 		r.Empty(list)
 
-		err = svc.AddBucketReplicationPolicy(ctx, replicationIDu1s1s2, nil)
+		_, err = svc.AddBucketReplicationPolicy(ctx, replicationIDu1s1s2, nil)
 		r.NoError(err)
 
 		res, err := svc.GetBucketReplicationPolicies(ctx, entity.NewBucketReplicationPolicyID(u1, b1))
@@ -463,12 +463,12 @@ func Test_policySvc_BucketReplicationPolicies(t *testing.T) {
 			r.EqualValues(s2, id.ToStorage)
 		}
 
-		err = svc.AddBucketReplicationPolicy(ctx, replicationIDu1s1s2, nil)
+		_, err = svc.AddBucketReplicationPolicy(ctx, replicationIDu1s1s2, nil)
 		r.ErrorIs(err, dom.ErrAlreadyExists)
-		err = svc.AddBucketReplicationPolicy(ctx, replicationIDu1s2s1, nil)
+		_, err = svc.AddBucketReplicationPolicy(ctx, replicationIDu1s2s1, nil)
 		r.ErrorIs(err, dom.ErrInvalidArg)
 
-		err = svc.AddBucketReplicationPolicy(ctx, replicationIDu2s2s1, nil)
+		_, err = svc.AddBucketReplicationPolicy(ctx, replicationIDu2s2s1, nil)
 		r.NoError(err)
 		res, err = svc.GetBucketReplicationPolicies(ctx, entity.NewBucketReplicationPolicyID(u2, b1))
 		r.NoError(err)
@@ -476,7 +476,7 @@ func Test_policySvc_BucketReplicationPolicies(t *testing.T) {
 		r.Len(res.Destinations, 1)
 		r.EqualValues(entity.NewBucketReplicationPolicyDestination(s1, b1), res.Destinations[0])
 
-		err = svc.AddBucketReplicationPolicy(ctx, replicationIDu1s2s1b2, nil)
+		_, err = svc.AddBucketReplicationPolicy(ctx, replicationIDu1s2s1b2, nil)
 		r.NoError(err)
 		res, err = svc.GetBucketReplicationPolicies(ctx, entity.NewBucketReplicationPolicyID(u1, b2))
 		r.NoError(err)
@@ -484,7 +484,7 @@ func Test_policySvc_BucketReplicationPolicies(t *testing.T) {
 		r.Len(res.Destinations, 1)
 		r.EqualValues(entity.NewBucketReplicationPolicyDestination(s1, b2), res.Destinations[0])
 
-		err = svc.AddBucketReplicationPolicy(ctx, replicationIDu1s1s3, nil)
+		_, err = svc.AddBucketReplicationPolicy(ctx, replicationIDu1s1s3, nil)
 		r.NoError(err)
 		res, err = svc.GetBucketReplicationPolicies(ctx, entity.NewBucketReplicationPolicyID(u1, b1))
 		r.NoError(err)
@@ -531,7 +531,7 @@ func Test_policySvc_BucketReplicationPolicies(t *testing.T) {
 			FromBucket:  b1,
 			ToBucket:    b1,
 		}
-		err := svc.AddBucketReplicationPolicy(ctx, replicationID12, nil)
+		_, err := svc.AddBucketReplicationPolicy(ctx, replicationID12, nil)
 		r.NoError(err)
 		queuesMock.InitReplicationInProgress(replicationID12)
 
@@ -638,7 +638,7 @@ func Test_policySvc_BucketReplicationPolicies(t *testing.T) {
 		}
 
 		for _, replicationID := range replicationIDs {
-			err = svc.AddBucketReplicationPolicy(ctx, replicationID, nil)
+			_, err = svc.AddBucketReplicationPolicy(ctx, replicationID, nil)
 			r.NoError(err)
 			exists, err := svc.IsReplicationPolicyExists(ctx, replicationID)
 			r.NoError(err)
@@ -671,7 +671,7 @@ func Test_CustomDestBucket(t *testing.T) {
 
 	queuesMock := &tasks.QueueServiceMock{}
 	tasks.Reset(queuesMock)
-	svc := NewService(c, queuesMock)
+	svc := NewService(c, queuesMock, nil)
 
 	// setup
 	user := "user"
@@ -704,18 +704,18 @@ func Test_CustomDestBucket(t *testing.T) {
 	}
 
 	// validate policy creation
-	err := svc.AddBucketReplicationPolicy(ctx, replicationIDMatchingSrcDest, nil)
+	_, err := svc.AddBucketReplicationPolicy(ctx, replicationIDMatchingSrcDest, nil)
 	r.ErrorIs(err, dom.ErrInvalidArg, "repl to same storage and bucket is not allowed")
 
-	err = svc.AddBucketReplicationPolicy(ctx, replicationIDDifferentBuckets, nil)
+	_, err = svc.AddBucketReplicationPolicy(ctx, replicationIDDifferentBuckets, nil)
 	r.NoError(err, "repl to same storage but different bucket is allowed")
 	queuesMock.InitReplicationInProgress(replicationIDDifferentBuckets)
 
-	err = svc.AddBucketReplicationPolicy(ctx, replicationIDDifferentSrcDest, nil)
+	_, err = svc.AddBucketReplicationPolicy(ctx, replicationIDDifferentSrcDest, nil)
 	r.NoError(err, "repl to different storage and different bucket is allowed")
 	queuesMock.InitReplicationInProgress(replicationIDDifferentSrcDest)
 
-	err = svc.AddBucketReplicationPolicy(ctx, replicationIDDifferentSrcDest, nil)
+	_, err = svc.AddBucketReplicationPolicy(ctx, replicationIDDifferentSrcDest, nil)
 	r.Error(err, "already exists")
 
 	// check replication lookup

@@ -1,5 +1,6 @@
 /*
  * Copyright © 2024 Clyso GmbH
+ * Copyright © 2025 STRATO GmbH
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -71,6 +72,7 @@ func (s *svc) Replicate(ctx context.Context, task tasks.SyncTask) error {
 			zerolog.Ctx(ctx).Info().Err(err).Msg("skip Replicate: replication is not configured")
 			return nil
 		}
+		zerolog.Ctx(ctx).Error().Err(err).Msg("getDestinations failed")
 		return err
 	}
 	if len(replTo) == 0 {
@@ -215,6 +217,7 @@ func (s *svc) Replicate(ctx context.Context, task tasks.SyncTask) error {
 func (s *svc) getDestinations(ctx context.Context, task tasks.SyncTask) ([]entity.ReplicationPolicyDestination, error) {
 	replPolicy, err := s.getReplicationPolicy(ctx, task)
 	if err != nil {
+		zerolog.Ctx(ctx).Error().Err(err).Msg("getReplicationPolicy FAILED")
 		return nil, err
 	}
 	if replPolicy.FromStorage == task.GetFrom() {
@@ -248,10 +251,14 @@ func (s *svc) getReplicationPolicy(ctx context.Context, task tasks.SyncTask) (*e
 	// bucketPolicy, err := s.policySvc.GetBucketReplicationPolicies(ctx, user, bucket)
 	bucketReplicationPolicyID := entity.NewBucketReplicationPolicyID(user, bucket)
 	bucketPolicies, err := s.policySvc.GetBucketReplicationPolicies(ctx, bucketReplicationPolicyID)
+	// if bucket policy exists, return it
+	// if not, create new bucket policy from user policy
 	if err == nil {
+		zerolog.Ctx(ctx).Debug().Msg("existing bucket routing policy found")
 		return bucketPolicies, nil
 	}
 	if !errors.Is(err, dom.ErrNotFound) {
+		zerolog.Ctx(ctx).Error().Err(err).Msg("GetBucketReplicationPolicies failed")
 		return nil, err
 	}
 	// if zero-downtime switch is in progress return empty replication policy
@@ -304,44 +311,92 @@ func (s *svc) getReplicationPolicy(ctx context.Context, task tasks.SyncTask) (*e
 
 		// no-error means that zero-downtime switch in progress.
 		// return replication policy without destinations
+		zerolog.Ctx(ctx).Debug().Msg("zero downtime switch in progress, returning empty replication policy")
 		return &entity.StorageReplicationPolicies{
 			FromStorage: task.GetFrom(),
 		}, nil
 	}
 
-	// policy not found. Create new bucket policy from user policy only for CreateBucket method
-	if _, ok := task.(*tasks.BucketCreatePayload); !ok {
-		return nil, fmt.Errorf("%w: replication policy not configured: %w", dom.ErrPolicy, err)
+	// policy not found. Create new bucket policy from user policy only for CreateBucket method or if OnDemandReplication is enabled
+	if s.policySvc.Config() != nil && !s.policySvc.Config().OnDemandReplication {
+		if _, ok := task.(*tasks.BucketCreatePayload); !ok {
+			return nil, fmt.Errorf("%w: replication policy not configured: %w", dom.ErrPolicy, err)
+		}
 	}
+
+	zerolog.Ctx(ctx).Info().Msg("creating new bucket replication policy")
 
 	userPolicy, err := s.policySvc.GetUserReplicationPolicies(ctx, user)
 	if err != nil {
 		if errors.Is(err, dom.ErrNotFound) {
 			return nil, fmt.Errorf("%w: user replication policy not configured: %w", dom.ErrPolicy, err)
 		}
+		zerolog.Ctx(ctx).Error().Err(err).Msg("GetUserReplicationPolicies failed")
 		return nil, err
 	}
+	bucketPolicies = &entity.StorageReplicationPolicies{FromStorage: userPolicy.FromStorage}
 	for _, to := range userPolicy.Destinations {
+		toBucket := bucket
+		if s.policySvc.Config() != nil {
+			bucketMapping, found := s.policySvc.Config().BucketMapping[to.Storage]
+			if !found {
+				bucketMapping = make(map[string]string)
+			}
+			mappedBucket, found := bucketMapping[toBucket]
+			if !found {
+				// obey ignore unmapped buckets setting
+				if s.policySvc.Config().IgnoreUnmappedBuckets {
+					zerolog.Ctx(ctx).Info().Msg("ignoring unmapped bucket")
+					continue
+				}
+			}
+			if found {
+				toBucket = mappedBucket
+			}
+		}
+
 		replicationID := entity.ReplicationStatusID{
 			User:        user,
 			FromStorage: userPolicy.FromStorage,
 			ToStorage:   to.Storage,
 			FromBucket:  bucket,
-			ToBucket:    bucket,
+			ToBucket:    toBucket,
 		}
-		err = s.policySvc.AddBucketReplicationPolicy(ctx, replicationID, nil)
+		newDest, err := s.policySvc.AddBucketReplicationPolicy(ctx, replicationID, nil)
 		if err != nil {
+			zerolog.Ctx(ctx).Error().Err(err).Msg("AddBucketReplicationPolicy FAILED")
 			if errors.Is(err, dom.ErrAlreadyExists) {
 				continue
 			}
+			return nil, err
+		}
+		// add new bucket policy to return value
+		bucketPolicies.Destinations = append(bucketPolicies.Destinations, newDest)
+		task, err := tasks.NewReplicationTask(ctx, replicationID, tasks.MigrateBucketListObjectsPayload{
+			Sync: tasks.Sync{
+				FromStorage: userPolicy.FromStorage,
+				ToStorage:   to.Storage,
+				ToBucket:    toBucket,
+			},
+			Bucket: bucket,
+		})
+		if err != nil {
+			zerolog.Ctx(ctx).Error().Err(err).Msg("NewReplicationTask failed")
+			return nil, err
+		}
+		_, err = s.taskClient.EnqueueContext(ctx, task)
+		if err != nil && !errors.Is(err, asynq.ErrDuplicateTask) && !errors.Is(err, asynq.ErrTaskIDConflict) {
+			zerolog.Ctx(ctx).Error().Err(err).Msg("EnqueueContext failed")
 			return nil, err
 		}
 	}
 
 	bucketPolicies, err = s.policySvc.GetBucketReplicationPolicies(ctx, bucketReplicationPolicyID)
 	if err != nil {
+		zerolog.Ctx(ctx).Error().Err(err).Msg("GetBucketReplicationPolicies failed in getReplicationPolicy")
 		return nil, fmt.Errorf("unable to get bucket replication policies: %w", err)
 	}
+	zerolog.Ctx(ctx).Info().Msg("new bucket replication policy created")
 
 	return bucketPolicies, nil
 }

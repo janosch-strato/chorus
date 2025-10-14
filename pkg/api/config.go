@@ -1,5 +1,6 @@
 /*
  * Copyright © 2023 Clyso GmbH
+ * Copyright © 2025 STRATO GmbH
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,9 +17,18 @@
 
 package api
 
+import (
+	"github.com/clyso/chorus/pkg/api/status"
+)
+
 type Config struct {
-	Enabled  bool `yaml:"enabled"`
-	GrpcPort int  `yaml:"grpcPort"`
-	HttpPort int  `yaml:"httpPort"`
-	Secure   bool `yaml:"secure"`
+	Enabled             bool          `yaml:"enabled"`
+	GrpcPort            int           `yaml:"grpcPort"`
+	HttpPort            int           `yaml:"httpPort"`
+	Secure              bool          `yaml:"secure"`
+	GrpcTLSCertFile     string        `yaml:"grpcCertFile"`
+	GrpcTLSKeyFile      string        `yaml:"grpcKeyFile"`
+	GrpcTLSClientAuth   bool          `yaml:"grpcClientAuth"`
+	GrpcTLSClientCAFile string        `yaml:"grpcClientCAFile"`
+	Status              status.Config `yaml:"status,omitempty"`
 }

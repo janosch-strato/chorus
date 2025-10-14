@@ -29,6 +29,8 @@ import (
 	"github.com/clyso/chorus/pkg/dom"
 	"github.com/clyso/chorus/pkg/entity"
 	"github.com/clyso/chorus/pkg/store"
+
+	"github.com/clyso/chorus/pkg/s3"
 	"github.com/clyso/chorus/pkg/tasks"
 	"github.com/clyso/chorus/pkg/validate"
 )
@@ -73,7 +75,7 @@ type Service interface {
 	AddUserReplicationPolicy(ctx context.Context, user string, policy entity.UserReplicationPolicy) error
 	DeleteUserReplication(ctx context.Context, user string, policy entity.UserReplicationPolicy) error
 
-	AddBucketReplicationPolicy(ctx context.Context, id entity.ReplicationStatusID, agentURL *string) error
+	AddBucketReplicationPolicy(ctx context.Context, id entity.ReplicationStatusID, agentURL *string) (entity.ReplicationPolicyDestination, error)
 	GetReplicationPolicyInfo(ctx context.Context, id entity.ReplicationStatusID) (entity.ReplicationStatus, error)
 	GetReplicationPolicyInfoExtended(ctx context.Context, id entity.ReplicationStatusID) (entity.ReplicationStatusExtended, error)
 	ListReplicationPolicyInfo(ctx context.Context) (map[entity.ReplicationStatusID]entity.ReplicationStatusExtended, error)
@@ -86,9 +88,12 @@ type Service interface {
 	// Archive replication. Will stop generating new events for this replication.
 	// Existing events will be processed and replication status metadata will be kept.
 	DeleteBucketReplicationsByUser(ctx context.Context, user, from string, to string) ([]string, error)
+
+	// public config accessor
+	Config() *s3.StorageConfig
 }
 
-func NewService(client redis.UniversalClient, queueSVC tasks.QueueService) *policySvc {
+func NewService(client redis.UniversalClient, queueSVC tasks.QueueService, storageConfig *s3.StorageConfig) *policySvc {
 	return &policySvc{
 		userRoutingPolicyStore:        store.NewUserRoutingPolicyStore(client),
 		bucketRoutingBlockStore:       store.NewRoutingBlockStore(client),
@@ -99,7 +104,9 @@ func NewService(client redis.UniversalClient, queueSVC tasks.QueueService) *poli
 		replicationSwitchStore:        store.NewReplicationSwitchInfoStore(client),
 		replicationSwitchHistoryStore: store.NewReplicationSwitchHistoryStore(client),
 		queueSvc:                      queueSVC,
+		storageConfig:                 storageConfig,
 	}
+
 }
 
 type policySvc struct {
@@ -112,6 +119,11 @@ type policySvc struct {
 	replicationSwitchStore        *store.ReplicationSwitchInfoStore
 	replicationSwitchHistoryStore *store.ReplicationSwitchHistoryStore
 	queueSvc                      tasks.QueueService
+	storageConfig                 *s3.StorageConfig
+}
+
+func (r *policySvc) Config() *s3.StorageConfig {
+	return r.storageConfig
 }
 
 func (r *policySvc) GetReplicationPolicyInfoExtended(ctx context.Context, id entity.ReplicationStatusID) (entity.ReplicationStatusExtended, error) {
@@ -553,42 +565,43 @@ func (r *policySvc) DeleteBucketReplicationsByUser(ctx context.Context, user, fr
 	return deleted, nil
 }
 
-func (r *policySvc) AddBucketReplicationPolicy(ctx context.Context, id entity.ReplicationStatusID, agentURL *string) error {
+func (r *policySvc) AddBucketReplicationPolicy(ctx context.Context, id entity.ReplicationStatusID, agentURL *string) (entity.ReplicationPolicyDestination, error) {
 	if err := validate.ReplicationStatusID(id); err != nil {
-		return fmt.Errorf("unable to validate replication status id: %w", err)
+		return entity.ReplicationPolicyDestination{}, fmt.Errorf("unable to validate replication status id: %w", err)
 	}
 
 	bucketRoutingPolicyID := entity.NewBucketRoutingPolicyID(id.User, id.FromBucket)
 	route, err := r.GetRoutingPolicy(ctx, bucketRoutingPolicyID)
 	if err != nil && !errors.Is(err, dom.ErrNotFound) {
-		return fmt.Errorf("%w: get routing error", err)
+		return entity.ReplicationPolicyDestination{}, fmt.Errorf("%w: get routing error", err)
 	}
 	if err == nil && route != id.FromStorage {
-		return fmt.Errorf("%w: unable to create bucket %s replication from %s because it is different from routing %s", dom.ErrInternal, id.FromBucket, id.FromStorage, route)
+		return entity.ReplicationPolicyDestination{}, fmt.Errorf("%w: unable to create bucket %s replication from %s because it is different from routing %s", dom.ErrInternal, id.FromBucket, id.FromStorage, route)
 	}
 
 	bucketReplicationPolicyID := entity.NewBucketReplicationPolicyID(id.User, id.FromBucket)
 	prev, err := r.GetBucketReplicationPolicies(ctx, bucketReplicationPolicyID)
 	if err != nil && !errors.Is(err, dom.ErrNotFound) {
-		return fmt.Errorf("unable to get bucket replication policies: %w", err)
+		zerolog.Ctx(ctx).Error().Err(err).Msg("GetBucketReplicationPolicies failed in AddBucketReplicationPolicy")
+		return entity.ReplicationPolicyDestination{}, fmt.Errorf("unable to get bucket replication policies: %w", err)
 	}
 	if err == nil {
 		if id.FromStorage != prev.FromStorage {
-			return fmt.Errorf("%w: all replication policies should have the same from value (u: %s b: %s): got %s, current %s", dom.ErrInvalidArg, id.User, id.FromBucket, id.FromStorage, prev.FromStorage)
+			return entity.ReplicationPolicyDestination{}, fmt.Errorf("%w: all replication policies should have the same from value (u: %s b: %s): got %s, current %s", dom.ErrInvalidArg, id.User, id.FromBucket, id.FromStorage, prev.FromStorage)
 		}
 		alreadyExists := slices.Contains(prev.Destinations, entity.NewBucketReplicationPolicyDestination(id.ToStorage, id.ToBucket))
 		if alreadyExists {
-			return dom.ErrAlreadyExists
+			return entity.ReplicationPolicyDestination{}, dom.ErrAlreadyExists
 		}
 	}
 
 	entry := entity.NewBucketReplicationPolicy(id.FromStorage, id.ToStorage, id.ToBucket)
 	affected, err := r.bucketReplicationPolicyStore.Add(ctx, bucketReplicationPolicyID, entry)
 	if err != nil {
-		return err
+		return entity.ReplicationPolicyDestination{}, err
 	}
 	if affected == 0 {
-		return dom.ErrAlreadyExists
+		return entity.ReplicationPolicyDestination{}, dom.ErrAlreadyExists
 	}
 
 	status := entity.ReplicationStatus{
@@ -596,17 +609,14 @@ func (r *policySvc) AddBucketReplicationPolicy(ctx context.Context, id entity.Re
 		AgentURL:  fromStrPtr(agentURL),
 	}
 	if err := r.replicationStatusStore.Set(ctx, id, status); err != nil {
-		return fmt.Errorf("unable to set replication status: %w", err)
+		return entity.ReplicationPolicyDestination{}, fmt.Errorf("unable to set replication status: %w", err)
 	}
-	if id.FromBucket == id.ToBucket {
-		return nil
+	if id.FromBucket != id.ToBucket {
+		if err = r.AddRoutingBlock(ctx, id.ToStorage, id.ToBucket); err != nil {
+			return entity.ReplicationPolicyDestination{}, fmt.Errorf("unable to add routing block: %w", err)
+		}
 	}
-
-	if err = r.AddRoutingBlock(ctx, id.ToStorage, id.ToBucket); err != nil {
-		return fmt.Errorf("unable to add routing block: %w", err)
-	}
-
-	return nil
+	return entity.NewBucketReplicationPolicyDestination(id.ToStorage, id.ToBucket), nil
 }
 
 func fromStrPtr(s *string) string {

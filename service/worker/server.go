@@ -1,5 +1,6 @@
 /*
  * Copyright © 2024 Clyso GmbH
+ * Copyright © 2025 STRATO GmbH
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
@@ -30,6 +32,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/clyso/chorus/pkg/api"
+	"github.com/clyso/chorus/pkg/api/status"
 	"github.com/clyso/chorus/pkg/dom"
 	"github.com/clyso/chorus/pkg/features"
 	"github.com/clyso/chorus/pkg/log"
@@ -129,9 +132,9 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 	inspector := asynq.NewInspector(queueRedis)
 	defer inspector.Close()
 	queueSvc := tasks.NewQueueService(inspector)
-	policySvc := policy.NewService(confRedis, queueSvc)
+	policySvc := policy.NewService(confRedis, queueSvc, conf.Storage)
 
-	err = policy_helper.CreateMainFollowerPolicies(ctx, *conf.Storage, s3Clients, policySvc, taskClient)
+	err = policy_helper.CreateMainFollowerPolicies(ctx, &logger, *conf.Storage, s3Clients, policySvc, taskClient)
 	if err != nil {
 		return fmt.Errorf("%w: unable to create defaul main-follower policies", err)
 	}
@@ -183,7 +186,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 				taskLogger.Warn().Err(err).Msg("process task failed. task will be retried")
 			}),
 			Logger:                     stdLogger,
-			LogLevel:                   asynq.LogLevel(zerolog.GlobalLevel() + 1),
+			LogLevel:                   asynq.LogLevel(zerolog.GlobalLevel()),
 			Queues:                     tasks.Priority,
 			StrictPriority:             true,
 			DynamicQueues:              true,
@@ -235,7 +238,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 
 	if conf.Api.Enabled {
 		handlers := api.GrpcHandlers(conf.Storage, s3Clients, taskClient, rc, policySvc, versionSvc, storageSvc, rpc.NewProxyClient(appRedis), rpc.NewAgentClient(appRedis), notifications.NewService(s3Clients), replicationStatusLocker, userLocker, &app)
-		start, stop, err := api.NewGrpcServer(conf.Api.GrpcPort, handlers, tp, conf.Log, app)
+		start, stop, err := api.NewGrpcServer(conf.Api.GrpcPort, handlers, tp, conf.Log, conf.Api, app)
 		if err != nil {
 			return err
 		}
@@ -243,21 +246,43 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 		if err != nil {
 			return err
 		}
-		start, stop, err = api.GRPCGateway(ctx, conf.Api, func(ctx context.Context, mux *runtime.ServeMux, endpoint string, opts []grpc.DialOption) error {
-			err = pb.RegisterChorusHandlerFromEndpoint(ctx, mux, endpoint, opts)
+		if conf.Api.Secure {
+			logger.Info().Msg("http gateway for tls grpc api is currently not supported")
+		} else {
+			start, stop, err = api.GRPCGateway(ctx, conf.Api, func(ctx context.Context, mux *runtime.ServeMux, endpoint string, opts []grpc.DialOption) error {
+				err = pb.RegisterChorusHandlerFromEndpoint(ctx, mux, endpoint, opts)
+				if err != nil {
+					return err
+				}
+				return nil
+			})
 			if err != nil {
 				return err
 			}
-			return nil
-		})
-		if err != nil {
-			return err
+			err = server.Add("http_api", start, stop)
+			if err != nil {
+				return err
+			}
 		}
-		err = server.Add("http_api", start, stop)
-		if err != nil {
-			return err
-		}
+
 		logger.Info().Msg("management api created")
+
+		if conf.Api.Status.Enabled {
+			logger.Info().Str("prefix", conf.Api.Status.Prefix).Str("statuspath", conf.Api.Status.StatusPath).Msg("setting up status api")
+			handler, err := status.Handler(conf.Api.Status, logger, handlers, policySvc)
+			if err != nil {
+				return err
+			}
+			statusSrv := &http.Server{Addr: fmt.Sprintf("0.0.0.0:%d", conf.Api.Status.Port), Handler: handler}
+			err = server.Add("status_api",
+				func(_ context.Context) error { return statusSrv.ListenAndServe() },
+				func(ctx context.Context) error { return statusSrv.Shutdown(ctx) },
+			)
+			if err != nil {
+				return err
+			}
+		}
+
 	}
 
 	if conf.Metrics.Enabled {

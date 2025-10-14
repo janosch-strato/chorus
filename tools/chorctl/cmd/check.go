@@ -1,5 +1,6 @@
 /*
  * Copyright © 2023 Clyso GmbH
+ * Copyright © 2025 STRATO GmbH
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,12 +27,15 @@ import (
 
 	pb "github.com/clyso/chorus/proto/gen/go/chorus"
 	"github.com/clyso/chorus/tools/chorctl/internal/api"
+	"github.com/clyso/chorus/tools/chorctl/internal/format"
 
 	"github.com/spf13/cobra"
 )
 
 var (
-	checkBucket string
+	checkBucket     string
+	checkToBucket   string
+	checkNameFormat string
 )
 
 // checkCmd represents the check command
@@ -43,7 +47,12 @@ var checkCmd = &cobra.Command{
 	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		conn, err := api.Connect(ctx, address)
+
+		tlsOptions, err := getTLSOptions()
+		if err != nil {
+			logrus.WithError(err).Fatal("unable to get tls options")
+		}
+		conn, err := api.Connect(ctx, address, tlsOptions)
 		if err != nil {
 			logrus.WithError(err).WithField("address", address).Fatal("unable to connect to api")
 		}
@@ -64,22 +73,17 @@ var checkCmd = &cobra.Command{
 		var from, to = args[0], args[1]
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		conn, err := api.Connect(ctx, address)
+
+		tlsOptions, err := getTLSOptions()
+		if err != nil {
+			logrus.WithError(err).Fatal("unable to get tls options")
+		}
+		conn, err := api.Connect(ctx, address, tlsOptions)
 		if err != nil {
 			logrus.WithError(err).WithField("address", address).Fatal("unable to connect to api")
 		}
 		defer conn.Close()
 		client := pb.NewChorusClient(conn)
-		if checkBucket != "" {
-			fmt.Println("Checking files in bucket", checkBucket, "...")
-			max := 6
-			if len(checkBucket) > max {
-				max = len(checkBucket)
-			}
-			fmt.Printf("🪣 %s | Match\t | MissSrc\t | MissDst\t | Differ\t | Error\n", fillName("BUCKET", max, " "))
-			check(ctx, client, from, to, checkBucket, max)
-			return
-		}
 
 		fmt.Println("Getting list of buckets...")
 
@@ -87,50 +91,62 @@ var checkCmd = &cobra.Command{
 		if err != nil {
 			logrus.WithError(err).Fatal("unable to get migration")
 		}
-		var buckets []string
+		todo := make([]*pb.Replication, 0, len(m.Replications))
+		names := make([]string, 0, len(m.Replications))
+		nameBuilder, err := format.NewReplNameBuilder(checkNameFormat)
+		if err != nil {
+			logrus.WithError(err).Fatal("unable to parse name format")
+		}
+		max := 6
 		for _, repl := range m.Replications {
 			if repl.From != from || repl.To != to {
 				continue
 			}
-			buckets = append(buckets, repl.Bucket)
+			if len(checkBucket) > 0 && repl.Bucket != checkBucket {
+				continue
+			}
+			if len(checkToBucket) > 0 && repl.ToBucket != checkToBucket {
+				continue
+			}
+			todo = append(todo, repl)
+			name := nameBuilder(repl)
+			if len(name) > max {
+				max = len(name)
+			}
+			names = append(names, name)
 		}
-		if len(buckets) == 0 {
+		if len(todo) == 0 {
 			logrus.Fatal("unable to get buckets list: no migration")
 		}
-		fmt.Println("Start check for", len(buckets), "buckets...")
-		max := 6
-		for _, b := range buckets {
-			if len(b) > max {
-				max = len(b)
-			}
-		}
+		fmt.Println("Start check for", len(todo), "buckets...")
 
 		fmt.Printf("🪣 %s | Match\t | MissSrc\t | MissDst\t | Differ \t | Error\t|\n", fillName("BUCKET", max, " "))
 		var wg sync.WaitGroup
-		wg.Add(len(buckets))
-		for i := range buckets {
-			go func(bucket string) {
+		wg.Add(len(todo))
+		for i := range todo {
+			go func(r *pb.Replication) {
 				defer wg.Done()
-				check(ctx, client, from, to, bucket, max)
-			}(buckets[i])
+				check(ctx, client, r.From, r.To, r.Bucket, r.ToBucket, names[i], max)
+			}(todo[i])
 		}
 		wg.Wait()
 	},
 }
 
-func check(ctx context.Context, client pb.ChorusClient, from, to, bucket string, max int) {
+func check(ctx context.Context, client pb.ChorusClient, from, to, bucket string, toBucket string, name string, max int) {
 	res, err := client.CompareBucket(ctx, &pb.CompareBucketRequest{
 		Bucket:    bucket,
 		From:      from,
 		To:        to,
 		ShowMatch: true,
 		User:      user,
+		ToBucket:  toBucket,
 	})
 	if err != nil {
 		logrus.WithError(err).Fatal("unable to check bucket")
 	}
 	if res.IsMatch {
-		fmt.Printf("✅ %s | %-7d\t | %-7d\t | %-7d\t | %-7d\t | %-7d\n", fillName(bucket, max, "."),
+		fmt.Printf("✅ %s | %-7d\t | %-7d\t | %-7d\t | %-7d\t | %-7d\n", fillName(name, max, "."),
 			len(res.Match),
 			len(res.MissFrom),
 			len(res.MissTo),
@@ -138,7 +154,7 @@ func check(ctx context.Context, client pb.ChorusClient, from, to, bucket string,
 			len(res.Error),
 		)
 	} else {
-		fmt.Println("\033[31m" + fmt.Sprintf("❌ %s | %-7d\t | %-7d\t | %-7d\t | %-7d\t | %-7d", fillName(bucket, max, "."),
+		fmt.Println("\033[31m" + fmt.Sprintf("❌ %s | %-7d\t | %-7d\t | %-7d\t | %-7d\t | %-7d", fillName(name, max, "."),
 			len(res.Match),
 			len(res.MissFrom),
 			len(res.MissTo),
@@ -161,6 +177,8 @@ func fillName(in string, size int, fill string) string {
 func init() {
 	rootCmd.AddCommand(checkCmd)
 	checkCmd.Flags().StringVarP(&checkBucket, "check-bucket", "b", "", "check bucket name")
+	checkCmd.Flags().StringVarP(&checkToBucket, "to-bucket", "t", "", "check bucket name")
+	checkCmd.Flags().StringVarP(&checkNameFormat, "name-format", "n", "%F->%T", format.ReplNameFormatHelp)
 	// Here you will define your flags and configuration settings.
 
 	// Cobra supports Persistent Flags which will work for this command

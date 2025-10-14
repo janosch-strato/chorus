@@ -174,7 +174,7 @@ func (s *svc) syncObjectTagging(ctx context.Context, fromClient, toClient s3clie
 	}
 	var mcErr mclient.ErrorResponse
 	if errors.As(err, &mcErr) && strings.Contains(mcErr.Code, "NoSuchTagSetError") {
-		err = toClient.S3().RemoveObjectTagging(ctx, toBucketName, object, mclient.RemoveObjectTaggingOptions{VersionID: ""}) //todo: versioning
+		err = toClient.S3().PutObjectTagging(ctx, toBucketName, object, nil, mclient.PutObjectTaggingOptions{VersionID: ""}) //todo: versioning
 		if err != nil {
 			if mclient.IsNetworkOrHostDown(err, true) {
 				return fmt.Errorf("sync object tags: remove tags err: %w", err)
@@ -191,11 +191,7 @@ func (s *svc) syncObjectTagging(ctx context.Context, fromClient, toClient s3clie
 		return nil
 	}
 
-	if fromTags != nil && len(fromTags.ToMap()) != 0 {
-		err = toClient.S3().PutObjectTagging(ctx, toBucketName, object, fromTags, mclient.PutObjectTaggingOptions{VersionID: ""}) //todo: versioning
-	} else {
-		err = toClient.S3().RemoveObjectTagging(ctx, toBucketName, object, mclient.RemoveObjectTaggingOptions{VersionID: ""}) //todo: versioning
-	}
+	err = toClient.S3().PutObjectTagging(ctx, toBucketName, object, fromTags, mclient.PutObjectTaggingOptions{VersionID: ""}) //todo: versioning
 	if err != nil {
 		if mclient.IsNetworkOrHostDown(err, true) {
 			return fmt.Errorf("sync object tags: put tags err: %w", err)

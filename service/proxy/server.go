@@ -1,5 +1,6 @@
 /*
  * Copyright © 2024 Clyso GmbH
+ * Copyright © 2025 STRATO GmbH
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -97,7 +98,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 	inspector := asynq.NewInspector(queueRedis)
 	defer inspector.Close()
 	queueSvc := tasks.NewQueueService(inspector)
-	policySvc := policy.NewService(confRedis, queueSvc)
+	policySvc := policy.NewService(confRedis, queueSvc, conf.Storage)
 
 	metricsSvc := metrics.NewS3Service(conf.Metrics.Enabled)
 
@@ -109,14 +110,14 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 
 	routeSvc := router.NewRouter(s3Clients, taskClient, verSvc, policySvc, storageSvc, limiter)
 	replSvc := replication.New(taskClient, verSvc, policySvc)
-	proxyMux := router.Serve(routeSvc, replSvc)
-	authCheck := auth.Middleware(conf.Auth, conf.Storage.Storages)
-	var handler http.Handler
+	handler := router.Serve(routeSvc, replSvc)
+	handler = auth.Middleware(conf.Auth, conf.Storage.Storages).Wrap(handler)
 	if conf.Metrics.Enabled {
-		handler = log.HttpMiddleware(conf.Log, app.App, app.AppID, router.Middleware(trace.HttpMiddleware(tp, metrics.ProxyMiddleware(authCheck.Wrap(proxyMux)))))
-	} else {
-		handler = log.HttpMiddleware(conf.Log, app.App, app.AppID, router.Middleware(trace.HttpMiddleware(tp, authCheck.Wrap(proxyMux))))
+		handler = metrics.ProxyMiddleware(handler)
 	}
+	handler = trace.HttpMiddleware(tp, handler)
+	handler = router.Middleware(conf.Storage, handler)
+	handler = log.HttpMiddleware(conf.Log, app.App, app.AppID, handler)
 	handler = cors.HttpMiddleware(conf.Cors, handler)
 
 	proxyServer := http.Server{Addr: fmt.Sprintf(":%d", conf.Port), Handler: handler}
@@ -131,7 +132,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 	logger.Info().Msg("proxy created")
 
 	err = server.Add("proxy_request_reply", func(ctx context.Context) error {
-		return rpc.ProxyServe(ctx, appRedis, requestReplyServer(conf.Address, conf.Auth.Custom, conf.Storage.Storages[conf.Auth.UseStorage].Credentials))
+		return rpc.ProxyServe(ctx, appRedis, requestReplyServer(conf.Address.Value(), conf.Auth.Custom, conf.Storage.Storages[conf.Auth.UseStorage].Credentials))
 	}, func(ctx context.Context) error { return nil })
 	if err != nil {
 		return err
