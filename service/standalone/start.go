@@ -89,12 +89,16 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 		}
 	}
 
+	logger := log.GetLogger(conf.Log, "", "")
+	if err := resolveAccessKeys(ctx, conf, logger); err != nil {
+		return err
+	}
+
 	// validate config
 	if err := conf.Validate(); err != nil {
 		return err
 	}
 	features.Set(conf.Features)
-	logger := log.GetLogger(conf.Log, "", "")
 	logger.Info().
 		Str("version", app.Version).
 		Str("commit", app.Commit).
