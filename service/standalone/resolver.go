@@ -91,7 +91,7 @@ func resolveAccessKeys(ctx context.Context, conf *Config, logger zerolog.Logger)
 				rsp.Body.Close()
 			}()
 			if rsp.StatusCode != http.StatusOK {
-				return fmt.Errorf("unexcted http status code %d", rsp.StatusCode)
+				return fmt.Errorf("unexpected http status code %d for key %s", rsp.StatusCode, creds.AccessKeyID)
 			}
 			var jsonRsp any
 			dec := json.NewDecoder(rsp.Body)
