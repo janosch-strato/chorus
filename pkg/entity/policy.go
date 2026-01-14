@@ -92,15 +92,17 @@ type ReplicationStatusExtended struct {
 }
 
 func (r *ReplicationStatusExtended) InitDone() bool {
-	return r.ListingStarted && r.InitMigration.Unprocessed == 0
+	return r.ListingStarted && r.InitMigration.Pending == 0
 }
 
 type QueueStats struct {
-	// Number of tasks left. Includes, new, in_progress, and retried tasks.
-	Unprocessed int
+	// Pending is the number of tasks left. Includes new, in_progress, and retried tasks.
+	Pending int
 	// Total number of successfully processed tasks.
 	Done int
-	// Failed  are tasks that exceeded maximum retries and were removed from the queue.
+	// Rescheduled are tasks that have been scheduled for retry.
+	Rescheduled int
+	// Failed are tasks that exceeded maximum retries and were removed from the queue.
 	Failed int
 	// Age of the oldest pending task in the queue.
 	Latency time.Duration

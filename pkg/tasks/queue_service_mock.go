@@ -97,7 +97,7 @@ func (q *QueueServiceMock) Stats(ctx context.Context, queueName string) (*QueueS
 		return nil, err
 	}
 	return &QueueStats{
-		Unprocessed: count,
+		Pending: count,
 		Paused:      q.Paused[queueName],
 		// ignore other stats for mock
 	}, nil
