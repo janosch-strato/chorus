@@ -60,7 +60,7 @@ func replicationToPb(id entity.ReplicationStatusID, value entity.ReplicationStat
 }
 
 func toListed(in entity.QueueStats) int64 {
-	return int64(in.Unprocessed + in.Done + in.Failed)
+	return int64(in.Pending + in.Done + in.Rescheduled)
 }
 
 func strPtr(s string) *string {

@@ -92,7 +92,7 @@ func (s *svc) handleZeroDowntimeReplicationSwitch(ctx context.Context, policyID 
 		zerolog.Ctx(ctx).Error().Msg("drop switch with downtime task: switch is not switch with downtime")
 		return nil
 	}
-	done := replStatus.InitDone() && replStatus.EventMigration.Unprocessed == 0
+	done := replStatus.InitDone() && replStatus.EventMigration.Pending == 0
 	// check if replication switch can be finished:
 	if !done {
 		// events queue is not drained yet - retry later

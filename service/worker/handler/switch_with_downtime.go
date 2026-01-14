@@ -167,7 +167,7 @@ func (s *svc) processSwitchWithDowntimeState(ctx context.Context, id entity.Repl
 		}
 		// check if max event lag condition is met:
 		if maxLag, ok := switchStatus.GetMaxEventLag(); ok {
-			currentLag := replStatus.EventMigration.Unprocessed
+			currentLag := replStatus.EventMigration.Pending
 			if currentLag > int(maxLag) {
 				// lag is too big to start the switch:
 				// skip this switch iteration:
@@ -193,7 +193,7 @@ func (s *svc) processSwitchWithDowntimeState(ctx context.Context, id entity.Repl
 
 	// 2. Switch in progress - check migration queue drain progress and max duration to complete, cancel, or check it later:
 	case entity.StatusInProgress:
-		isQueueDrained := replStatus.EventMigration.Unprocessed == 0
+		isQueueDrained := replStatus.EventMigration.Pending == 0
 		if !isQueueDrained {
 			// switch is still in progress, check if max duration exceeded:
 			if switchStatus.LastStartedAt == nil {

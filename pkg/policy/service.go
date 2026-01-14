@@ -169,8 +169,9 @@ func (r *policySvc) fillExtendedReplicationStatus(ctx context.Context, id entity
 func (r *policySvc) buildQueueStats(ctx context.Context, queues []string) (bool, entity.QueueStats, error) {
 	isPaused := false
 	result := entity.QueueStats{
-		Unprocessed: 0,
+		Pending:     0,
 		Done:        0,
+		Rescheduled: 0,
 		Failed:      0,
 		Latency:     0,
 		MemoryUsage: 0,
@@ -189,9 +190,10 @@ func (r *policySvc) buildQueueStats(ctx context.Context, queues []string) (bool,
 			isPaused = true
 		}
 		// sum up counters for all queues
-		result.Unprocessed += stats.Unprocessed
+		result.Pending += stats.Pending
 		result.Done += stats.ProcessedTotal
-		result.Failed += stats.FailedTotal
+		result.Rescheduled += stats.Rescheduled
+		result.Failed += stats.Failed
 		result.MemoryUsage += stats.MemoryUsage
 		if result.Latency < stats.Latency {
 			// return the maximum latency across all queues
