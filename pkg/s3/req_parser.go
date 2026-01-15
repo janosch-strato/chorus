@@ -29,17 +29,17 @@ func ParseBucketAndObject(r *http.Request, domains []ConfAddr) (bucket string, o
 
 	// check for bucket in hostname ("virtual host")
 	hostParts := strings.SplitN(r.Host, ".", 2)
-	bucketHostname := false
+	bucketInHostname = false
 	for _, dom := range domains {
-		if hostParts[1] == dom.Value() {
-			bucketHostname = true
+		if len(hostParts) > 1 && hostParts[1] == dom.Value() {
+			bucketInHostname = true
 			bucket = hostParts[0]
 			object = path
 			break
 		}
 	}
 
-	if !bucketHostname {
+	if !bucketInHostname {
 		parts := strings.SplitN(path, "/", 2)
 		bucket = parts[0]
 		if bucket == "" {

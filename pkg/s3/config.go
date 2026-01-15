@@ -40,6 +40,15 @@ type StorageConfig struct {
 	IgnoreUnmappedBuckets bool                         `yaml:"ignoreUnmappedBuckets"`
 	BucketMapping         map[string]map[string]string `yaml:"bucketMapping"`
 	storageList           []string
+	Keyserver             KeyServerConfig `yaml:"keyserver"`
+}
+
+type KeyServerConfig struct {
+	Endpoint           string `yaml:"Endpoint"`
+	EndpointSkipVerify bool   `yaml:"EndpointSkipVerify"`
+	Timeout            string `yaml:"Timeout"`
+	Token              string `yaml:"Token"`
+	DecryptionKey      string `yaml:"DecryptionKey"`
 }
 
 type Storage struct {
