@@ -38,7 +38,7 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 				IsPaused: false,
 				InitMigration: entity.QueueStats{
 					// init done
-					Unprocessed: 0,
+					Pending: 0,
 				},
 				EventMigration: entity.QueueStats{},
 			}, entity.ReplicationSwitchInfo{
@@ -66,7 +66,7 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 				IsPaused: false,
 				InitMigration: entity.QueueStats{
 					// init done
-					Unprocessed: 0,
+					Pending: 0,
 				},
 				EventMigration: entity.QueueStats{},
 			}, entity.ReplicationSwitchInfo{
@@ -118,7 +118,7 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 				IsPaused: false,
 				InitMigration: entity.QueueStats{
 					// init not done
-					Unprocessed: 1,
+					Pending: 1,
 				},
 				EventMigration: entity.QueueStats{},
 			}, entity.ReplicationSwitchInfo{
@@ -146,7 +146,7 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 				IsPaused: false,
 				InitMigration: entity.QueueStats{
 					// init not done
-					Unprocessed: 1,
+					Pending: 1,
 				},
 				EventMigration: entity.QueueStats{},
 			}, entity.ReplicationSwitchInfo{
@@ -176,11 +176,11 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 				IsPaused: false,
 				InitMigration: entity.QueueStats{
 					// init done
-					Unprocessed: 0,
+					Pending: 0,
 				},
 				EventMigration: entity.QueueStats{
 					// event lag is 10
-					Unprocessed: 10,
+					Pending: 10,
 				},
 			}, entity.ReplicationSwitchInfo{
 				ReplicationSwitchDowntimeOpts: entity.ReplicationSwitchDowntimeOpts{
@@ -213,11 +213,11 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 			IsPaused: false,
 			InitMigration: entity.QueueStats{
 				// init done
-				Unprocessed: 0,
+				Pending: 0,
 			},
 			EventMigration: entity.QueueStats{
 				// queue not drained
-				Unprocessed: 1,
+				Pending: 1,
 			},
 		}, entity.ReplicationSwitchInfo{
 			ReplicationSwitchDowntimeOpts: entity.ReplicationSwitchDowntimeOpts{
@@ -244,11 +244,11 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 			IsPaused: false,
 			InitMigration: entity.QueueStats{
 				// init done
-				Unprocessed: 0,
+				Pending: 0,
 			},
 			EventMigration: entity.QueueStats{
 				// queue not drained
-				Unprocessed: 1,
+				Pending: 1,
 			},
 		}, entity.ReplicationSwitchInfo{
 			ReplicationSwitchDowntimeOpts: entity.ReplicationSwitchDowntimeOpts{
@@ -278,11 +278,11 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 			IsPaused: false,
 			InitMigration: entity.QueueStats{
 				// init done
-				Unprocessed: 0,
+				Pending: 0,
 			},
 			EventMigration: entity.QueueStats{
 				// queue drained
-				Unprocessed: 0,
+				Pending: 0,
 			},
 		}, entity.ReplicationSwitchInfo{
 			ReplicationSwitchDowntimeOpts: entity.ReplicationSwitchDowntimeOpts{
@@ -312,11 +312,11 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 			IsPaused: false,
 			InitMigration: entity.QueueStats{
 				// init done
-				Unprocessed: 0,
+				Pending: 0,
 			},
 			EventMigration: entity.QueueStats{
 				// queue drained
-				Unprocessed: 0,
+				Pending: 0,
 			},
 		}, entity.ReplicationSwitchInfo{
 			ReplicationSwitchDowntimeOpts: entity.ReplicationSwitchDowntimeOpts{
@@ -346,11 +346,11 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 			IsPaused: false,
 			InitMigration: entity.QueueStats{
 				// init done
-				Unprocessed: 0,
+				Pending: 0,
 			},
 			EventMigration: entity.QueueStats{
 				// queue drained
-				Unprocessed: 0,
+				Pending: 0,
 			},
 		}, entity.ReplicationSwitchInfo{
 			ReplicationSwitchDowntimeOpts: entity.ReplicationSwitchDowntimeOpts{
@@ -383,11 +383,11 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 			IsPaused: false,
 			InitMigration: entity.QueueStats{
 				// init done
-				Unprocessed: 0,
+				Pending: 0,
 			},
 			EventMigration: entity.QueueStats{
 				// queue drained
-				Unprocessed: 0,
+				Pending: 0,
 			},
 		}, entity.ReplicationSwitchInfo{
 			ReplicationSwitchDowntimeOpts: entity.ReplicationSwitchDowntimeOpts{
@@ -418,11 +418,11 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 			IsPaused: false,
 			InitMigration: entity.QueueStats{
 				// init done
-				Unprocessed: 0,
+				Pending: 0,
 			},
 			EventMigration: entity.QueueStats{
 				// queue drained
-				Unprocessed: 0,
+				Pending: 0,
 			},
 		}, entity.ReplicationSwitchInfo{
 			ReplicationSwitchDowntimeOpts: entity.ReplicationSwitchDowntimeOpts{
@@ -451,11 +451,11 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 			IsPaused: false,
 			InitMigration: entity.QueueStats{
 				// init done
-				Unprocessed: 0,
+				Pending: 0,
 			},
 			EventMigration: entity.QueueStats{
 				// queue drained
-				Unprocessed: 0,
+				Pending: 0,
 			},
 		}, entity.ReplicationSwitchInfo{
 			ReplicationSwitchDowntimeOpts: entity.ReplicationSwitchDowntimeOpts{
