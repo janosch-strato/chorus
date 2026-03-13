@@ -36,15 +36,17 @@ type QueueService interface {
 }
 
 type QueueStats struct {
-	// Number of tasks to be processed in the queue.
-	// Includes includes in_progress, not_started, and retied tasks.
+	// Pending is the number of tasks to be processed in the queue.
+	// Includes in_progress, not_started, and retried tasks.
 	// In other words, all tasks except failed and processed tasks.
-	Unprocessed int
+	Pending int
 	// Total number of tasks processed.
 	ProcessedTotal int
-	// Total number of tasks failed.
+	// Rescheduled is the total number of tasks that have failed at least once and are pending retry.
+	Rescheduled int
+
 	// Failed tasks are those that have been retried the maximum number of times and removed from the queue.
-	FailedTotal int
+	Failed int
 
 	// Paused indicates whether the queue is paused.
 	// If true, tasks in the queue will not be processed.
@@ -76,9 +78,10 @@ func (q *queueService) Stats(ctx context.Context, queueName string) (*QueueStats
 		return nil, err
 	}
 	return &QueueStats{
-		Unprocessed:    unprocessedCount(info),
+		Pending:        unprocessedCount(info),
 		ProcessedTotal: info.ProcessedTotal,
-		FailedTotal:    info.FailedTotal,
+		Rescheduled:    info.FailedTotal,
+		Failed:         info.Archived,
 		Paused:         info.Paused,
 		MemoryUsage:    info.MemoryUsage,
 		Latency:        info.Latency,

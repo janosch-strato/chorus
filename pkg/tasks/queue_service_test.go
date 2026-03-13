@@ -115,7 +115,7 @@ func Test_queueService_UnprocessedCount(t *testing.T) {
 	})
 }
 
-func Test_queueService_RetriedTasksCountAsUnprocessed(t *testing.T) {
+func Test_queueService_RetriedTasksCountAsPending(t *testing.T) {
 	ctx := t.Context()
 	c := testutil.SetupRedis(t)
 	inspector := asynq.NewInspectorFromRedisClient(c)
@@ -273,8 +273,8 @@ func Test_queueService_Stats(t *testing.T) {
 	r.NoError(err, "failed to check if queue is paused")
 	r.False(paused, "expected queue to be not paused")
 
-	// check stats unproccessed and paused match
-	r.Equal(count, stats.Unprocessed, "expected stats unprocessed count to match")
+	// check stats pending and paused match
+	r.Equal(count, stats.Pending, "expected stats pending count to match")
 	r.Equal(paused, stats.Paused, "expected stats paused to match")
 	r.NotZero(stats.Latency, "expected stats latency to be non-zero")
 
@@ -286,13 +286,13 @@ func Test_queueService_Stats(t *testing.T) {
 	stats, err = qs.Stats(ctx, queueName)
 	r.NoError(err, "failed to get stats for queue after pausing")
 	r.True(stats.Paused, "expected queue to be paused after pausing")
-	r.Equal(1, stats.Unprocessed, "expected stats unprocessed count to match after pausing")
+	r.Equal(1, stats.Pending, "expected stats pending count to match after pausing")
 	r.NotZero(stats.Latency, "expected stats latency to be non-zero after pausing")
 
 	// compare with inspector info
 	info, err := inspector.GetQueueInfo(queueName)
 	r.NoError(err, "failed to get queue info from inspector")
-	r.Equal(info.FailedTotal, stats.FailedTotal, "expected stats failed total to match inspector info")
+	r.Equal(info.FailedTotal, stats.Rescheduled, "expected stats rescheduled to match inspector info failed total")
 	r.Equal(info.ProcessedTotal, stats.ProcessedTotal, "expected stats processed total to match inspector info")
 	r.Equal(info.MemoryUsage, stats.MemoryUsage, "expected stats memory usage to match inspector info")
 }

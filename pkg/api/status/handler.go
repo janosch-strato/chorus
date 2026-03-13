@@ -91,9 +91,10 @@ type S3FloatMigrationStatusResponse struct {
 }
 
 type migrationProgress struct {
-	Done     int    `json:"done"`
-	Pending  int    `json:"pending"`
-	Progress string `json:"progress"`
+	Done        int `json:"done"`
+	Pending     int `json:"pending"`
+	Rescheduled int `json:"rescheduled"`
+	Failed      int `json:"failed"`
 }
 
 func Handler(conf Config, logger zerolog.Logger, cSrv pb.ChorusServer, pSvc policy.Service) (http.Handler, error) {
@@ -176,8 +177,8 @@ func Handler(conf Config, logger zerolog.Logger, cSrv pb.ChorusServer, pSvc poli
 func handleStatusRequest(logger zerolog.Logger, cSrv pb.ChorusServer, pSvc policy.Service, checkPollInterval time.Duration, prefix string, lockRcloneFunc func(string) bool, unlockRcloneFunc func(string), lockChorusFunc func(string) bool, unlockChorusFunc func(string), w http.ResponseWriter, r *http.Request) {
 	var err error
 	var bucket string
-	initProgress := migrationProgress{Progress: "0%"}
-	liveProgress := migrationProgress{Progress: "0%"}
+	initProgress := migrationProgress{}
+	liveProgress := migrationProgress{}
 	progress := false
 	rspCode := http.StatusInternalServerError
 	rsp := S3FloatMigrationStatusResponse{
@@ -276,23 +277,17 @@ func handleStatusRequest(logger zerolog.Logger, cSrv pb.ChorusServer, pSvc polic
 	}
 
 	if progress {
-		ip := 0.0
-		if repl.InitMigration.Done != 0 {
-			ip = (float64(repl.InitMigration.Done) / float64(repl.InitMigration.Done+repl.InitMigration.Unprocessed)) * 100.0
-		}
 		initProgress = migrationProgress{
-			Done:     repl.InitMigration.Done,
-			Pending:  repl.InitMigration.Unprocessed,
-			Progress: fmt.Sprintf("%.0f%%", ip),
-		}
-		lp := 0.0
-		if repl.EventMigration.Done != 0 {
-			lp = (float64(repl.EventMigration.Done) / float64(repl.EventMigration.Done+repl.EventMigration.Unprocessed)) * 100.0
+			Done:        repl.InitMigration.Done,
+			Pending:     repl.InitMigration.Pending,
+			Failed:      repl.InitMigration.Failed,
+			Rescheduled: repl.InitMigration.Rescheduled,
 		}
 		liveProgress = migrationProgress{
-			Done:     repl.EventMigration.Done,
-			Pending:  repl.EventMigration.Unprocessed,
-			Progress: fmt.Sprintf("%.0f%%", lp),
+			Done:        repl.EventMigration.Done,
+			Pending:     repl.EventMigration.Pending,
+			Failed:      repl.EventMigration.Failed,
+			Rescheduled: repl.EventMigration.Rescheduled,
 		}
 	}
 
@@ -308,7 +303,7 @@ func handleStatusRequest(logger zerolog.Logger, cSrv pb.ChorusServer, pSvc polic
 		return
 	}
 
-	if repl.EventMigration.Unprocessed > 0 {
+	if repl.EventMigration.Pending > 0 {
 		rspCode = http.StatusOK
 		rsp.Status = statusLiveSync
 		return
