@@ -122,6 +122,7 @@ func New(conf *s3.StorageConfig, jsonLog bool, metricsSvc metrics.S3Service, mam
 	}
 
 	ci := fs.GetConfig(context.TODO())
+	ci.LowLevelRetries = 1
 	ci.UseJSONLog = jsonLog
 	ci.LogLevel = mapLogLvl()
 	ci.Metadata = true
