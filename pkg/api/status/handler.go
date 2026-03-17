@@ -51,7 +51,6 @@ const (
 	statusUnknown migrationStatus = iota
 	statusRunning
 	statusLiveSync
-	statusPaused
 	statusDone
 	statusInconsistent
 	statusFailed
@@ -65,8 +64,6 @@ func (ms migrationStatus) String() string {
 		return "running"
 	case statusLiveSync:
 		return "livesync"
-	case statusPaused:
-		return "paused"
 	case statusDone:
 		return "done"
 	case statusInconsistent:
