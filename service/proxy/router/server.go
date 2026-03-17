@@ -35,7 +35,7 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 		defer span.End()
 		r = r.WithContext(ctx)
 		logger := zerolog.Ctx(r.Context())
-		logger.Debug().Msg("proxy: new request received")
+		logger.Info().Msg("proxy: new request received")
 
 		resp, taskList, storage, isApiErr, err := router.Route(r)
 		if err != nil {

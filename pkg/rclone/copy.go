@@ -244,7 +244,7 @@ func (r *S3CopySvc) CopyObject(ctx context.Context, from File, to File) error {
 	}
 
 	zerolog.Ctx(ctx).
-		Debug().
+		Info().
 		Str("file_size", util.ByteCountSI(fromObjectSize)).
 		Msg("starting obj copy")
 
