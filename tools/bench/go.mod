@@ -1,6 +1,6 @@
 module github.com/clyso/chorus/tools/bench
 
-go 1.25.5
+go 1.26.2
 
 replace github.com/hibiken/asynq => github.com/ionos-cloud/s3float-asynq v0.0.0-20260409134012-439ac64bb3e0
 
