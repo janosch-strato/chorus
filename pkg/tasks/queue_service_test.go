@@ -292,7 +292,22 @@ func Test_queueService_Stats(t *testing.T) {
 	// compare with inspector info
 	info, err := inspector.GetQueueInfo(queueName)
 	r.NoError(err, "failed to get queue info from inspector")
-	r.Equal(info.FailedTotal, stats.Rescheduled, "expected stats rescheduled to match inspector info failed total")
+	r.Equal(info.FailedTotal-info.Archived, stats.Rescheduled, "expected stats rescheduled to equal failed total minus archived")
+	r.Equal(info.Archived, stats.Failed, "expected stats failed to match inspector info archived")
 	r.Equal(info.ProcessedTotal, stats.ProcessedTotal, "expected stats processed total to match inspector info")
 	r.Equal(info.MemoryUsage, stats.MemoryUsage, "expected stats memory usage to match inspector info")
+
+	// archive pending tasks so Archived > 0, then verify Rescheduled and Failed
+	archived, err := inspector.ArchiveAllPendingTasks(queueName)
+	r.NoError(err, "failed to archive all pending tasks")
+	r.Equal(1, archived, "expected to archive 1 task")
+
+	stats, err = qs.Stats(ctx, queueName)
+	r.NoError(err, "failed to get stats for queue after archiving")
+	info, err = inspector.GetQueueInfo(queueName)
+	r.NoError(err, "failed to get queue info from inspector after archiving")
+
+	r.Greater(info.Archived, 0, "expected archived count to be greater than 0")
+	r.Equal(info.FailedTotal-info.Archived, stats.Rescheduled, "expected stats rescheduled to equal failed total minus archived after archiving")
+	r.Equal(info.Archived, stats.Failed, "expected stats failed to match inspector info archived after archiving")
 }
