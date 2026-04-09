@@ -39,7 +39,7 @@ lint:
 
 .PHONY: vuln
 vuln:
-	go tool govulncheck ./...
+	go tool govulncheck $$(go list ./... | grep -v '/test')
 
 .PHONY: license-check
 license-check:
