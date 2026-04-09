@@ -298,10 +298,16 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 	return server.Start(ctx)
 }
 
+const maxRetryDelay = 24 * time.Hour
+
 func retryDelay(n int, err error, task *asynq.Task) time.Duration {
 	var rlErr *dom.ErrRateLimitExceeded
 	if errors.As(err, &rlErr) {
 		return rlErr.RetryIn
 	}
-	return asynq.DefaultRetryDelayFunc(n, err, task)
+	d := asynq.DefaultRetryDelayFunc(n, err, task)
+	if d > maxRetryDelay {
+		return maxRetryDelay
+	}
+	return d
 }

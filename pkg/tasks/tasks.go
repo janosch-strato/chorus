@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/buger/jsonparser"
@@ -355,7 +356,7 @@ func NewReplicationTask[T ReplicationTask](ctx context.Context, replicationID en
 	// by setting a default timeout of 30 minutes if no deadline and  a timeout of 0 is configured.
 	// Since golangs time.Duration has no value for infinity, we just set  a timeout of 100 years here,
 	// which is most likely long enough for most tasks.
-	optionList = append(optionList, asynq.Timeout(100*24*365*time.Hour))
+	optionList = append(optionList, asynq.Timeout(100*24*365*time.Hour), asynq.MaxRetry(math.MaxInt32))
 	return asynq.NewTask(taskType, bytes, optionList...), nil
 }
 
@@ -408,5 +409,6 @@ func NewTask[T ApiTask](ctx context.Context, payload T) (*asynq.Task, error) {
 		return nil, fmt.Errorf("%w: unknown task type %T", dom.ErrInvalidArg, p)
 	}
 
+	optionList = append(optionList, asynq.MaxRetry(math.MaxInt32))
 	return asynq.NewTask(taskType, bytes, optionList...), nil
 }
