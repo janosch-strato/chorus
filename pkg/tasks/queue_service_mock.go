@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hibiken/asynq"
+
 	"github.com/clyso/chorus/pkg/dom"
 	"github.com/clyso/chorus/pkg/entity"
 )
@@ -27,6 +29,10 @@ var _ QueueService = (*QueueServiceMock)(nil)
 type QueueServiceMock struct {
 	Queues map[string]int
 	Paused map[string]bool
+
+	// FailedTasks maps queue name to a list of TaskInfo returned by ListFailedTasks.
+	FailedTasks map[string][]*asynq.TaskInfo
+	ListErr     error
 }
 
 // InitReplicationInProgress test helper to initialize queues for replication in progress
@@ -71,6 +77,8 @@ func (q *QueueServiceMock) EventReplicationDone(id entity.ReplicationStatusID) {
 func Reset(q *QueueServiceMock) {
 	q.Queues = make(map[string]int)
 	q.Paused = make(map[string]bool)
+	q.FailedTasks = nil
+	q.ListErr = nil
 }
 
 func (q *QueueServiceMock) UnprocessedCount(ctx context.Context, ignoreNotfound bool, queueName ...string) (int, error) {
@@ -141,4 +149,11 @@ func (q *QueueServiceMock) Resume(ctx context.Context, queueName string) error {
 	}
 	q.Paused[queueName] = false
 	return nil
+}
+
+func (q *QueueServiceMock) ListFailedTasks(_ context.Context, queueName string) ([]*asynq.TaskInfo, error) {
+	if q.ListErr != nil {
+		return nil, q.ListErr
+	}
+	return q.FailedTasks[queueName], nil
 }

@@ -360,6 +360,54 @@ func NewReplicationTask[T ReplicationTask](ctx context.Context, replicationID en
 	return asynq.NewTask(taskType, bytes, optionList...), nil
 }
 
+// TaskObjectInfo holds decoded object/bucket identifiers from a task payload.
+type TaskObjectInfo struct {
+	Object      string
+	Bucket      string
+	ToBucket    string
+	FromStorage string
+	ToStorage   string
+}
+
+// ParseTaskObjectInfo decodes a task payload into object/bucket identifiers.
+// Returns nil for unrecognised task types.
+func ParseTaskObjectInfo(taskType string, payload []byte) (*TaskObjectInfo, error) {
+	var p struct {
+		Sync
+		Bucket string     `json:"Bucket"`
+		Object dom.Object `json:"Object"`
+		Obj    ObjPayload `json:"Obj"`
+		Prefix string     `json:"Prefix"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return nil, fmt.Errorf("unmarshal %s payload: %w", taskType, err)
+	}
+
+	info := &TaskObjectInfo{
+		ToBucket:    p.ToBucket,
+		FromStorage: p.FromStorage,
+		ToStorage:   p.ToStorage,
+	}
+
+	switch taskType {
+	case TypeMigrateObjCopy:
+		info.Object = p.Obj.Name
+		info.Bucket = p.Bucket
+	case TypeMigrateVersionedObject:
+		info.Object = p.Prefix
+		info.Bucket = p.Bucket
+	case TypeObjectSync, TypeObjectSyncTags, TypeObjectSyncACL:
+		info.Object = p.Object.Name
+		info.Bucket = p.Object.Bucket
+	case TypeBucketCreate, TypeBucketDelete, TypeBucketSyncTags, TypeBucketSyncACL:
+		info.Bucket = p.Bucket
+	default:
+		return nil, nil
+	}
+
+	return info, nil
+}
+
 type ApiTask interface {
 	ZeroDowntimeReplicationSwitchPayload |
 		SwitchWithDowntimePayload |

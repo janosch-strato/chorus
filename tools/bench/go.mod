@@ -2,6 +2,8 @@ module github.com/clyso/chorus/tools/bench
 
 go 1.25.5
 
+replace github.com/hibiken/asynq => github.com/ionos-cloud/s3float-asynq v0.0.0-20260409134012-439ac64bb3e0
+
 require (
 	github.com/boltdb/bolt v1.3.1
 	github.com/clyso/chorus v0.0.0-20230613144403-9f72f3d28ede

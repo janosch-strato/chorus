@@ -33,6 +33,7 @@ type QueueService interface {
 	Pause(ctx context.Context, queueName string) error
 	Delete(ctx context.Context, queueName string, force bool) error
 	Stats(ctx context.Context, queueName string) (*QueueStats, error)
+	ListFailedTasks(ctx context.Context, queueName string) ([]*asynq.TaskInfo, error)
 }
 
 type QueueStats struct {
@@ -160,4 +161,12 @@ func (q *queueService) Resume(ctx context.Context, queueName string) error {
 		}
 	}
 	return err
+}
+
+func (q *queueService) ListFailedTasks(_ context.Context, queueName string) ([]*asynq.TaskInfo, error) {
+	infos, err := q.inspector.ListFailedTasks(queueName)
+	if err != nil {
+		return nil, fmt.Errorf("list failed tasks for queue %s: %w", queueName, err)
+	}
+	return infos, nil
 }

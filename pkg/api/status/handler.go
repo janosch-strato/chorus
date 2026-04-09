@@ -27,19 +27,28 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hibiken/asynq"
 	"github.com/rs/zerolog"
 
+	"github.com/clyso/chorus/pkg/dom"
 	"github.com/clyso/chorus/pkg/entity"
 	"github.com/clyso/chorus/pkg/policy"
+	"github.com/clyso/chorus/pkg/tasks"
 	pb "github.com/clyso/chorus/proto/gen/go/chorus"
 )
 
+type MaintApiConfig struct {
+	Enabled bool   `yaml:"enabled,omitempty"`
+	Prefix  string `yaml:"prefix,omitempty"`
+}
+
 type Config struct {
-	Enabled       bool   `yaml:"enabled,omitempty"`
-	Prefix        string `yaml:"prefix,omitempty"`
-	StatusPath    string `yaml:"path,omitempty"`
-	Port          int    `yaml:"port"`
-	CheckInterval string `yaml:"checkinterval,omitempty"`
+	Enabled       bool           `yaml:"enabled,omitempty"`
+	Prefix        string         `yaml:"prefix,omitempty"`
+	StatusPath    string         `yaml:"path,omitempty"`
+	Port          int            `yaml:"port"`
+	CheckInterval string         `yaml:"checkinterval,omitempty"`
+	MaintApi      MaintApiConfig `yaml:"maintApi,omitempty"`
 }
 
 const defaultStatusPath = "bucket"
@@ -94,12 +103,13 @@ type migrationProgress struct {
 	Failed      int `json:"failed"`
 }
 
-func Handler(conf Config, logger zerolog.Logger, cSrv pb.ChorusServer, pSvc policy.Service) (http.Handler, error) {
+func Handler(conf Config, logger zerolog.Logger, cSrv pb.ChorusServer, pSvc policy.Service, qSvc tasks.QueueService) (http.Handler, error) {
 	var err error
 	var prefix = ""
 	if conf.Prefix != "" {
 		prefix = strings.Trim(conf.Prefix, "/")
 	}
+	// The underscore prevents collisions with S3 bucket names (which cannot contain underscores).
 	if !strings.Contains(prefix, "_") {
 		return nil, errors.New("prefix is required and has to contain a '_'")
 	}
@@ -168,7 +178,197 @@ func Handler(conf Config, logger zerolog.Logger, cSrv pb.ChorusServer, pSvc poli
 		handleStatusRequest(logger, cSrv, pSvc, checkInterval, statusPath, lockRcloneBucket, unlockRcloneBucket, lockChorusBucket, unlockChorusBucket, w, r)
 	})
 
+	if conf.MaintApi.Enabled {
+		maintPrefix := strings.Trim(conf.MaintApi.Prefix, "/")
+		if maintPrefix == "" {
+			maintPrefix = "maint_api"
+		}
+		// The underscore prevents collisions with S3 bucket names (which cannot contain underscores).
+		if !strings.Contains(maintPrefix, "_") {
+			return nil, errors.New("maint_api prefix must contain a '_'")
+		}
+		failedTasksPath := fmt.Sprintf("/%s/bucket/", maintPrefix)
+		logger.Info().Str("path", failedTasksPath).Msg("setting up maint api")
+		srv.HandleFunc(failedTasksPath, func(w http.ResponseWriter, r *http.Request) {
+			handleMaintFailedTasks(logger, qSvc, pSvc, failedTasksPath, w, r)
+		})
+	} else {
+		logger.Info().Msg("maint api is disabled")
+	}
+
 	return srv, nil
+}
+
+type failedTask struct {
+	TaskID       string     `json:"taskId,omitempty"`
+	Object       string     `json:"object,omitempty"`
+	Bucket       string     `json:"bucket,omitempty"`
+	ToBucket     string     `json:"toBucket,omitempty"`
+	ErrorMessage string     `json:"errorMessage,omitempty"`
+	RetryCount   int        `json:"retryCount"`
+	MaxRetry     int        `json:"maxRetry"`
+	LastFailedAt *time.Time `json:"lastFailedAt,omitempty"`
+	TaskType     string     `json:"taskType,omitempty"`
+}
+
+func taskInfoToFailedTask(t *asynq.TaskInfo) (*failedTask, error) {
+	ft := &failedTask{
+		TaskID:       t.ID,
+		ErrorMessage: t.LastErr,
+		RetryCount:   t.Retried,
+		MaxRetry:     t.MaxRetry,
+		TaskType:     t.Type,
+	}
+	if !t.LastFailedAt.IsZero() {
+		ts := t.LastFailedAt.UTC()
+		ft.LastFailedAt = &ts
+	}
+	info, err := tasks.ParseTaskObjectInfo(t.Type, t.Payload)
+	if err != nil {
+		return nil, err
+	}
+	if info != nil {
+		ft.Object = info.Object
+		ft.Bucket = info.Bucket
+		ft.ToBucket = info.ToBucket
+	}
+	return ft, nil
+}
+
+// lookupReplication finds the single replication for the given bucket.
+// Returns dom.ErrNotFound if no replication exists.
+func lookupReplication(ctx context.Context, logger zerolog.Logger, pSvc policy.Service, bucket string) (entity.ReplicationStatusID, entity.ReplicationStatusExtended, error) {
+	replications, err := pSvc.ListReplicationPolicyInfo(ctx)
+	if err != nil {
+		logger.Error().Err(err).Msg("ListReplicationPolicyInfo failed")
+		return entity.ReplicationStatusID{}, entity.ReplicationStatusExtended{}, fmt.Errorf("list replication policies: %w", err)
+	}
+
+	var (
+		found    bool
+		foundID  entity.ReplicationStatusID
+		foundExt entity.ReplicationStatusExtended
+		extra    int
+		mismatch bool
+	)
+	for id, status := range replications {
+		if id.FromBucket != bucket {
+			logger.Error().Str("fromBucket", id.FromBucket).Msg("non-matching replication detected")
+			mismatch = true
+			continue
+		}
+		if found {
+			logger.Error().Str("fromBucket", id.FromBucket).Msg("superfluous replication detected")
+			extra++
+			continue
+		}
+		foundID = id
+		foundExt = status
+		found = true
+	}
+
+	if extra > 0 {
+		return entity.ReplicationStatusID{}, entity.ReplicationStatusExtended{}, fmt.Errorf("%w: multiple replications detected", dom.ErrInternal)
+	}
+	if mismatch {
+		return entity.ReplicationStatusID{}, entity.ReplicationStatusExtended{}, fmt.Errorf("%w: replication bucket mismatch", dom.ErrInternal)
+	}
+	if !found {
+		return entity.ReplicationStatusID{}, entity.ReplicationStatusExtended{}, dom.ErrNotFound
+	}
+	return foundID, foundExt, nil
+}
+
+func handleMaintFailedTasks(logger zerolog.Logger, qSvc tasks.QueueService, pSvc policy.Service, pathPrefix string, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	ctx := r.Context()
+
+	var rspCode int
+	var rspBody any
+
+	defer func() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(rspCode)
+		if err := json.NewEncoder(w).Encode(rspBody); err != nil {
+			logger.Error().Err(err).Msg("failed to encode response")
+		}
+	}()
+
+	params := r.URL.Query()
+
+	remainder := strings.Trim(strings.TrimPrefix(r.URL.Path, pathPrefix), "/")
+	// expect: {bucket}/failed-tasks
+	parts := strings.SplitN(remainder, "/", 3)
+	if len(parts) != 2 || parts[1] != "failed-tasks" {
+		rspCode = http.StatusBadRequest
+		rspBody = map[string]string{"error": "unexpected path"}
+		return
+	}
+	bucket := parts[0]
+	if bucket == "" {
+		rspCode = http.StatusBadRequest
+		rspBody = map[string]string{"error": "bucket is required"}
+		return
+	}
+
+	replID, _, err := lookupReplication(ctx, logger, pSvc, bucket)
+	if errors.Is(err, dom.ErrNotFound) {
+		rspCode = http.StatusNotFound
+		rspBody = map[string]string{"error": "no replication found for bucket"}
+		return
+	}
+	if err != nil {
+		rspCode = http.StatusInternalServerError
+		rspBody = map[string]string{"error": "internal error"}
+		return
+	}
+
+	errorFilter := params.Get("error_filter")
+
+	queues := tasks.AllReplicationQueues(replID)
+	var results []*failedTask
+
+	for _, queue := range queues {
+		infos, err := qSvc.ListFailedTasks(ctx, queue)
+		if err != nil {
+			logger.Error().Err(err).Str("queue", queue).Msg("list failed tasks failed")
+			rspCode = http.StatusInternalServerError
+			rspBody = map[string]string{"error": "internal error"}
+			return
+		}
+		for _, info := range infos {
+			ft, err := taskInfoToFailedTask(info)
+			if err != nil {
+				logger.Error().Err(err).Str("taskId", info.ID).Msg("failed to parse task payload, skipping")
+				continue
+			}
+			results = append(results, ft)
+		}
+	}
+
+	if errorFilter != "" {
+		filtered := results[:0]
+		for _, t := range results {
+			if !strings.Contains(t.ErrorMessage, errorFilter) {
+				continue
+			}
+			filtered = append(filtered, t)
+		}
+		results = filtered
+	}
+
+	if results == nil {
+		results = []*failedTask{}
+	}
+
+	rspCode = http.StatusOK
+	rspBody = results
 }
 
 func handleStatusRequest(logger zerolog.Logger, cSrv pb.ChorusServer, pSvc policy.Service, checkPollInterval time.Duration, prefix string, lockRcloneFunc func(string) bool, unlockRcloneFunc func(string), lockChorusFunc func(string) bool, unlockChorusFunc func(string), w http.ResponseWriter, r *http.Request) {
@@ -242,36 +442,19 @@ func handleStatusRequest(logger zerolog.Logger, cSrv pb.ChorusServer, pSvc polic
 	}
 	logger.Debug().Bool("check", check).Bool("progress", progress).Bool("checkChorus", checkChorus).Msg("processing status request")
 
-	replications, err := pSvc.ListReplicationPolicyInfo(ctx)
-	if err != nil {
-		logger.Error().Err(err).Msg("ListReplicationPolicyInfo failed")
-		rspCode = http.StatusInternalServerError
-		return
-	}
-
-	var repl *entity.ReplicationStatusExtended
-	var replId *entity.ReplicationStatusID
-	for id, status := range replications {
-		if repl != nil {
-			logger.Error().Str("User", id.User).Str("FromStorage", id.FromStorage).Str("FromBucket", id.FromBucket).Str("ToStorage", id.ToStorage).Str("ToBucket", id.ToBucket).Msg("superfluous migration detected")
-			rspCode = http.StatusInternalServerError
-			return
-		}
-		if id.FromBucket != bucket {
-			logger.Error().Str("User", id.User).Str("FromStorage", id.FromStorage).Str("FromBucket", id.FromBucket).Str("ToStorage", id.ToStorage).Str("ToBucket", id.ToBucket).Msg("non-matching migration detected")
-			rspCode = http.StatusInternalServerError
-			return
-		}
-		repl = &status
-		replId = &id
-	}
-
-	if repl == nil {
+	replId, replExt, err := lookupReplication(ctx, logger, pSvc, bucket)
+	if errors.Is(err, dom.ErrNotFound) {
 		logger.Info().Msg("no matching replication configured. returning success with status unknown")
 		rspCode = http.StatusOK
 		rsp.Status = statusUnknown
 		return
 	}
+	if err != nil {
+		rspCode = http.StatusInternalServerError
+		rsp.Error = "internal error"
+		return
+	}
+	repl := &replExt
 
 	if progress {
 		initProgress = migrationProgress{

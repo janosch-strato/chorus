@@ -269,7 +269,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 
 		if conf.Api.Status.Enabled {
 			logger.Info().Str("prefix", conf.Api.Status.Prefix).Str("statuspath", conf.Api.Status.StatusPath).Msg("setting up status api")
-			handler, err := status.Handler(conf.Api.Status, logger, handlers, policySvc)
+			handler, err := status.Handler(conf.Api.Status, logger, handlers, policySvc, queueSvc)
 			if err != nil {
 				return err
 			}
