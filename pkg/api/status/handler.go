@@ -283,7 +283,9 @@ func handleMaintFailedTasks(logger zerolog.Logger, qSvc tasks.QueueService, pSvc
 	if r.Method != http.MethodGet {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		if err := json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"}); err != nil {
+			logger.Error().Err(err).Msg("failed to encode response")
+		}
 		return
 	}
 

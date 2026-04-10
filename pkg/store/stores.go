@@ -492,10 +492,10 @@ type ReplicationStatusLocker struct {
 	RedisIDKeyLocker[entity.ReplicationStatusID]
 }
 
-func NewReplicationStatusLocker(client redis.Cmdable, overlap time.Duration) *ReplicationStatusLocker {
+func NewReplicationStatusLocker(appCtx context.Context, client redis.Cmdable, overlap time.Duration) *ReplicationStatusLocker {
 	return &ReplicationStatusLocker{
 		*NewRedisIDKeyLocker[entity.ReplicationStatusID](
-			client, "lk:repl",
+			appCtx, client, "lk:repl",
 			ReplicationStatusIDToTokensConverter, TokensToReplicationStatusIDConverter,
 			overlap),
 	}
@@ -505,10 +505,10 @@ type UserLocker struct {
 	RedisIDKeyLocker[string]
 }
 
-func NewUserLocker(client redis.Cmdable, overlap time.Duration) *UserLocker {
+func NewUserLocker(appCtx context.Context, client redis.Cmdable, overlap time.Duration) *UserLocker {
 	return &UserLocker{
 		*NewRedisIDKeyLocker[string](
-			client, "lk:user",
+			appCtx, client, "lk:user",
 			StringToSingleTokenConverter, SingleTokenToStringConverter,
 			overlap),
 	}
@@ -531,10 +531,10 @@ type ObjectLocker struct {
 	RedisIDKeyLocker[entity.ObjectLockID]
 }
 
-func NewObjectLocker(client redis.Cmdable, overlap time.Duration) *ObjectLocker {
+func NewObjectLocker(appCtx context.Context, client redis.Cmdable, overlap time.Duration) *ObjectLocker {
 	return &ObjectLocker{
 		*NewRedisIDKeyLocker[entity.ObjectLockID](
-			client, "lk:object",
+			appCtx, client, "lk:object",
 			ObjectLockIDToTokensConverter, TokensToObjectLockIDConverter,
 			overlap),
 	}
@@ -555,10 +555,10 @@ type BucketLocker struct {
 	RedisIDKeyLocker[entity.BucketLockID]
 }
 
-func NewBucketLocker(client redis.Cmdable, overlap time.Duration) *BucketLocker {
+func NewBucketLocker(appCtx context.Context, client redis.Cmdable, overlap time.Duration) *BucketLocker {
 	return &BucketLocker{
 		*NewRedisIDKeyLocker[entity.BucketLockID](
-			client, "lk:bucket",
+			appCtx, client, "lk:bucket",
 			BucketLockIDToTokensConverter, TokensToBucketLockIDConverter,
 			overlap),
 	}
