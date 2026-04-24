@@ -128,11 +128,15 @@ func seedFailedTask(qMock *tasks.QueueServiceMock, queue string, info *asynq.Tas
 	qMock.FailedTasks[queue] = append(qMock.FailedTasks[queue], info)
 }
 
-func callHandler(qMock *tasks.QueueServiceMock, pMock *policyServiceMock, path string) *httptest.ResponseRecorder {
+func callHandler(qMock *tasks.QueueServiceMock, pMock *policyServiceMock, bucket string, queryParts ...string) *httptest.ResponseRecorder {
 	logger := zerolog.Nop()
-	req := httptest.NewRequest(http.MethodGet, path, nil)
+	urlPath := testPathPrefix + bucket + "/failed-tasks"
+	if len(queryParts) > 0 {
+		urlPath += "?" + queryParts[0]
+	}
+	req := httptest.NewRequest(http.MethodGet, urlPath, nil)
 	rec := httptest.NewRecorder()
-	handleMaintFailedTasks(logger, qMock, pMock, testPathPrefix, rec, req)
+	handleMaintFailedTasks(logger, qMock, pMock, bucket, rec, req)
 	return rec
 }
 
@@ -146,32 +150,18 @@ func decodeResponse(t *testing.T, rec *httptest.ResponseRecorder) []*failedTask 
 func TestHandleMaintFailedTasks(t *testing.T) {
 	payload := makeTaskPayload(t, "my-bucket", "obj.txt", "main", "backup", "my-bucket")
 
-	t.Run("missing bucket returns 400", func(t *testing.T) {
-		qMock, pMock := setupMocks(t)
-		rec := callHandler(qMock, pMock, testPathPrefix)
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
-		assert.Contains(t, rec.Body.String(), "unexpected path")
-	})
-
-	t.Run("bucket with slash returns 400", func(t *testing.T) {
-		qMock, pMock := setupMocks(t)
-		rec := callHandler(qMock, pMock, testPathPrefix+"a/b/c")
-		assert.Equal(t, http.StatusBadRequest, rec.Code)
-		assert.Contains(t, rec.Body.String(), "unexpected path")
-	})
-
 	t.Run("policy service error returns 500", func(t *testing.T) {
 		qMock, pMock := setupMocks(t)
 		pMock.err = errors.New("redis down")
 		pMock.replications = nil
-		rec := callHandler(qMock, pMock, testPathPrefix+"my-bucket/failed-tasks")
+		rec := callHandler(qMock, pMock, "my-bucket")
 		assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	})
 
 	t.Run("no replication found returns 404", func(t *testing.T) {
 		qMock, pMock := setupMocks(t)
 		pMock.replications = map[entity.ReplicationStatusID]entity.ReplicationStatusExtended{}
-		rec := callHandler(qMock, pMock, testPathPrefix+"my-bucket/failed-tasks")
+		rec := callHandler(qMock, pMock, "my-bucket")
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 		assert.Contains(t, rec.Body.String(), "no replication found")
 	})
@@ -181,7 +171,7 @@ func TestHandleMaintFailedTasks(t *testing.T) {
 		otherID := testReplID
 		otherID.ToStorage = "archive"
 		pMock.replications[otherID] = entity.ReplicationStatusExtended{}
-		rec := callHandler(qMock, pMock, testPathPrefix+"my-bucket/failed-tasks")
+		rec := callHandler(qMock, pMock, "my-bucket")
 		assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	})
 
@@ -192,7 +182,7 @@ func TestHandleMaintFailedTasks(t *testing.T) {
 		pMock.replications = map[entity.ReplicationStatusID]entity.ReplicationStatusExtended{
 			wrongID: {},
 		}
-		rec := callHandler(qMock, pMock, testPathPrefix+"my-bucket/failed-tasks")
+		rec := callHandler(qMock, pMock, "my-bucket")
 		assert.Equal(t, http.StatusInternalServerError, rec.Code)
 		assert.Contains(t, rec.Body.String(), "internal error")
 	})
@@ -204,7 +194,7 @@ func TestHandleMaintFailedTasks(t *testing.T) {
 			ID: "t1", Type: tasks.TypeObjectSync, Payload: payload,
 			State: asynq.TaskStateRetry, Retried: 2, MaxRetry: 5, LastErr: "err1",
 		})
-		rec := callHandler(qMock, pMock, testPathPrefix+"my-bucket/failed-tasks")
+		rec := callHandler(qMock, pMock, "my-bucket")
 		assert.Equal(t, http.StatusOK, rec.Code)
 		resp := decodeResponse(t, rec)
 		require.Len(t, resp, 1)
@@ -218,7 +208,7 @@ func TestHandleMaintFailedTasks(t *testing.T) {
 			ID: "t1", Type: tasks.TypeObjectSync, Payload: payload,
 			State: asynq.TaskStateArchived, Retried: 5, MaxRetry: 5, LastErr: "fatal",
 		})
-		rec := callHandler(qMock, pMock, testPathPrefix+"my-bucket/failed-tasks")
+		rec := callHandler(qMock, pMock, "my-bucket")
 		assert.Equal(t, http.StatusOK, rec.Code)
 		resp := decodeResponse(t, rec)
 		require.Len(t, resp, 1)
@@ -233,7 +223,7 @@ func TestHandleMaintFailedTasks(t *testing.T) {
 				State: asynq.TaskStateRetry, Retried: 1, MaxRetry: 5, LastErr: fmt.Sprintf("err-%d", i),
 			})
 		}
-		rec := callHandler(qMock, pMock, testPathPrefix+"my-bucket/failed-tasks")
+		rec := callHandler(qMock, pMock, "my-bucket")
 		assert.Equal(t, http.StatusOK, rec.Code)
 		resp := decodeResponse(t, rec)
 		assert.Len(t, resp, len(queues))
@@ -254,7 +244,7 @@ func TestHandleMaintFailedTasks(t *testing.T) {
 			ID: "t3", Type: tasks.TypeObjectSync, Payload: payload,
 			State: asynq.TaskStateArchived, LastErr: "connection timeout",
 		})
-		rec := callHandler(qMock, pMock, testPathPrefix+"my-bucket/failed-tasks?error_filter=connection")
+		rec := callHandler(qMock, pMock, "my-bucket", "error_filter=connection")
 		assert.Equal(t, http.StatusOK, rec.Code)
 		resp := decodeResponse(t, rec)
 		require.Len(t, resp, 2)
@@ -270,14 +260,14 @@ func TestHandleMaintFailedTasks(t *testing.T) {
 			ID: "t1", Type: tasks.TypeObjectSync, Payload: payload,
 			State: asynq.TaskStateArchived, LastErr: "some error",
 		})
-		rec := callHandler(qMock, pMock, testPathPrefix+"my-bucket/failed-tasks?error_filter=nomatch")
+		rec := callHandler(qMock, pMock, "my-bucket", "error_filter=nomatch")
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Contains(t, rec.Body.String(), `[]`)
 	})
 
 	t.Run("no tasks returns empty array not null", func(t *testing.T) {
 		qMock, pMock := setupMocks(t)
-		rec := callHandler(qMock, pMock, testPathPrefix+"my-bucket/failed-tasks")
+		rec := callHandler(qMock, pMock, "my-bucket")
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Contains(t, rec.Body.String(), `[]`)
 	})
@@ -285,13 +275,13 @@ func TestHandleMaintFailedTasks(t *testing.T) {
 	t.Run("queue service error returns 500", func(t *testing.T) {
 		qMock, pMock := setupMocks(t)
 		qMock.ListErr = errors.New("redis connection lost")
-		rec := callHandler(qMock, pMock, testPathPrefix+"my-bucket/failed-tasks")
+		rec := callHandler(qMock, pMock, "my-bucket")
 		assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	})
 
 	t.Run("response has application/json content type", func(t *testing.T) {
 		qMock, pMock := setupMocks(t)
-		rec := callHandler(qMock, pMock, testPathPrefix+"my-bucket/failed-tasks")
+		rec := callHandler(qMock, pMock, "my-bucket")
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 	})

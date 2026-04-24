@@ -187,10 +187,15 @@ func Handler(conf Config, logger zerolog.Logger, cSrv pb.ChorusServer, pSvc poli
 		if !strings.Contains(maintPrefix, "_") {
 			return nil, errors.New("maint_api prefix must contain a '_'")
 		}
-		failedTasksPath := fmt.Sprintf("/%s/bucket/", maintPrefix)
-		logger.Info().Str("path", failedTasksPath).Msg("setting up maint api")
-		srv.HandleFunc(failedTasksPath, func(w http.ResponseWriter, r *http.Request) {
-			handleMaintFailedTasks(logger, qSvc, pSvc, failedTasksPath, w, r)
+		failedTasksPattern := fmt.Sprintf("/%s/bucket/{bucket}/failed-tasks", maintPrefix)
+		migStatusPattern := fmt.Sprintf("/%s/bucket/{bucket}/mig-status", maintPrefix)
+		logger.Info().Str("failedTasksPath", failedTasksPattern).Str("migStatusPath", migStatusPattern).Msg("setting up maint api")
+		srv.HandleFunc(failedTasksPattern, func(w http.ResponseWriter, r *http.Request) {
+			handleMaintFailedTasks(logger, qSvc, pSvc, r.PathValue("bucket"), w, r)
+		})
+		srv.HandleFunc(migStatusPattern, func(w http.ResponseWriter, r *http.Request) {
+			handleMaintMigStatus(logger, cSrv, pSvc, checkInterval, r.PathValue("bucket"),
+				lockRcloneBucket, unlockRcloneBucket, lockChorusBucket, unlockChorusBucket, w, r)
 		})
 	} else {
 		logger.Info().Msg("maint api is disabled")
@@ -279,7 +284,7 @@ func lookupReplication(ctx context.Context, logger zerolog.Logger, pSvc policy.S
 	return foundID, foundExt, nil
 }
 
-func handleMaintFailedTasks(logger zerolog.Logger, qSvc tasks.QueueService, pSvc policy.Service, pathPrefix string, w http.ResponseWriter, r *http.Request) {
+func handleMaintFailedTasks(logger zerolog.Logger, qSvc tasks.QueueService, pSvc policy.Service, bucket string, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -303,21 +308,6 @@ func handleMaintFailedTasks(logger zerolog.Logger, qSvc tasks.QueueService, pSvc
 	}()
 
 	params := r.URL.Query()
-
-	remainder := strings.Trim(strings.TrimPrefix(r.URL.Path, pathPrefix), "/")
-	// expect: {bucket}/failed-tasks
-	parts := strings.SplitN(remainder, "/", 3)
-	if len(parts) != 2 || parts[1] != "failed-tasks" {
-		rspCode = http.StatusBadRequest
-		rspBody = map[string]string{"error": "unexpected path"}
-		return
-	}
-	bucket := parts[0]
-	if bucket == "" {
-		rspCode = http.StatusBadRequest
-		rspBody = map[string]string{"error": "bucket is required"}
-		return
-	}
 
 	replID, _, err := lookupReplication(ctx, logger, pSvc, bucket)
 	if errors.Is(err, dom.ErrNotFound) {
@@ -374,8 +364,27 @@ func handleMaintFailedTasks(logger zerolog.Logger, qSvc tasks.QueueService, pSvc
 }
 
 func handleStatusRequest(logger zerolog.Logger, cSrv pb.ChorusServer, pSvc policy.Service, checkPollInterval time.Duration, prefix string, lockRcloneFunc func(string) bool, unlockRcloneFunc func(string), lockChorusFunc func(string) bool, unlockChorusFunc func(string), w http.ResponseWriter, r *http.Request) {
+	bucket := strings.Trim(strings.TrimPrefix(r.URL.Path, prefix), "/")
+	writeErr := func(code int, msg string) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		if err := json.NewEncoder(w).Encode(S3FloatMigrationStatusResponse{Bucket: bucket, Error: msg}); err != nil {
+			logger.Error().Err(err).Msg("failed to encode error response")
+		}
+	}
+	if strings.ContainsRune(bucket, '/') {
+		writeErr(http.StatusBadRequest, "unexpected path")
+		return
+	}
+	if bucket == "" {
+		writeErr(http.StatusBadRequest, "bucket missing")
+		return
+	}
+	handleMaintMigStatus(logger, cSrv, pSvc, checkPollInterval, bucket, lockRcloneFunc, unlockRcloneFunc, lockChorusFunc, unlockChorusFunc, w, r)
+}
+
+func handleMaintMigStatus(logger zerolog.Logger, cSrv pb.ChorusServer, pSvc policy.Service, checkPollInterval time.Duration, bucket string, lockRcloneFunc func(string) bool, unlockRcloneFunc func(string), lockChorusFunc func(string) bool, unlockChorusFunc func(string), w http.ResponseWriter, r *http.Request) {
 	var err error
-	var bucket string
 	initProgress := migrationProgress{}
 	liveProgress := migrationProgress{}
 	progress := false
@@ -403,17 +412,6 @@ func handleStatusRequest(logger zerolog.Logger, cSrv pb.ChorusServer, pSvc polic
 		}
 	}()
 
-	bucket = strings.Trim(strings.TrimPrefix(r.URL.Path, prefix), "/")
-	if strings.ContainsRune(bucket, '/') {
-		rspCode = http.StatusBadRequest
-		rsp.Error = "unexpected path"
-		return
-	}
-	if bucket == "" {
-		rspCode = http.StatusBadRequest
-		rsp.Error = "bucket missing"
-		return
-	}
 	logger = logger.With().Str("bucket", bucket).Logger()
 	params := r.URL.Query()
 	check := false

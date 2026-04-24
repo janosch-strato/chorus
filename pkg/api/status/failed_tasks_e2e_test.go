@@ -197,14 +197,11 @@ func TestE2EMaintFailedTasks(t *testing.T) {
 		return makeTaskPayload(t, bucket, object, env.replID.FromStorage, env.replID.ToStorage, env.replID.ToBucket)
 	}
 
-	t.Run("missing bucket returns 400", func(t *testing.T) {
+	t.Run("missing bucket returns 404", func(t *testing.T) {
 		resp, err := http.Get(baseURL)
 		require.NoError(t, err)
 		defer resp.Body.Close()
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-		var body map[string]string
-		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-		assert.Contains(t, body["error"], "unexpected path")
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	})
 
 	t.Run("unknown bucket returns 500 mismatch", func(t *testing.T) {
@@ -387,5 +384,62 @@ func TestE2EMaintFailedTasks(t *testing.T) {
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+	})
+}
+
+func TestE2EOldStatusAPI(t *testing.T) {
+	env := setupE2E(t)
+	oldStatusURL := env.server.URL + "/test_prefix/bucket/" + env.replID.FromBucket
+
+	t.Run("old API endpoint still works", func(t *testing.T) {
+		env.reset(t)
+		resp, err := http.Get(oldStatusURL)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+		var body struct {
+			Bucket string `json:"bucket"`
+			Status string `json:"status"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+		assert.Equal(t, env.replID.FromBucket, body.Bucket)
+		assert.NotEmpty(t, body.Status)
+	})
+}
+
+func TestE2EMaintMigStatus(t *testing.T) {
+	env := setupE2E(t)
+	migStatusURL := env.server.URL + "/maint_api/bucket/" + env.replID.FromBucket + "/mig-status"
+
+	t.Run("returns 200 with status field", func(t *testing.T) {
+		env.reset(t)
+		resp, err := http.Get(migStatusURL)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+		var body struct {
+			Bucket string `json:"bucket"`
+			Status string `json:"status"`
+		}
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+		assert.Equal(t, env.replID.FromBucket, body.Bucket)
+		assert.NotEmpty(t, body.Status)
+	})
+
+	t.Run("unknown bucket returns 500 mismatch", func(t *testing.T) {
+		unknownURL := env.server.URL + "/maint_api/bucket/nonexistent-bucket/mig-status"
+		resp, err := http.Get(unknownURL)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	})
+
+	t.Run("missing bucket returns 404", func(t *testing.T) {
+		resp, err := http.Get(env.server.URL + "/maint_api/bucket/")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	})
 }
