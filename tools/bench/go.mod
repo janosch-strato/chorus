@@ -1,6 +1,6 @@
 module github.com/clyso/chorus/tools/bench
 
-go 1.26.2
+go 1.26.3
 
 replace github.com/hibiken/asynq => github.com/ionos-cloud/s3float-asynq v0.0.0-20260409134012-439ac64bb3e0
 
@@ -12,7 +12,7 @@ require (
 	github.com/minio/minio-go/v7 v7.0.92
 	github.com/sirupsen/logrus v1.9.3
 	github.com/wcharczuk/go-chart/v2 v2.1.1
-	golang.org/x/sync v0.19.0
+	golang.org/x/sync v0.20.0
 	google.golang.org/grpc v1.79.3
 )
 
@@ -83,12 +83,12 @@ require (
 	go.opentelemetry.io/otel/trace v1.40.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.7.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/crypto v0.46.0 // indirect
+	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/exp v0.0.0-20250718183923-645b1fa84792 // indirect
 	golang.org/x/image v0.11.0 // indirect
-	golang.org/x/net v0.48.0 // indirect
-	golang.org/x/sys v0.40.0 // indirect
-	golang.org/x/text v0.32.0 // indirect
+	golang.org/x/net v0.53.0 // indirect
+	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
