@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/buger/jsonparser"
@@ -355,8 +356,56 @@ func NewReplicationTask[T ReplicationTask](ctx context.Context, replicationID en
 	// by setting a default timeout of 30 minutes if no deadline and  a timeout of 0 is configured.
 	// Since golangs time.Duration has no value for infinity, we just set  a timeout of 100 years here,
 	// which is most likely long enough for most tasks.
-	optionList = append(optionList, asynq.Timeout(100*24*365*time.Hour))
+	optionList = append(optionList, asynq.Timeout(100*24*365*time.Hour), asynq.MaxRetry(math.MaxInt32))
 	return asynq.NewTask(taskType, bytes, optionList...), nil
+}
+
+// TaskObjectInfo holds decoded object/bucket identifiers from a task payload.
+type TaskObjectInfo struct {
+	Object      string
+	Bucket      string
+	ToBucket    string
+	FromStorage string
+	ToStorage   string
+}
+
+// ParseTaskObjectInfo decodes a task payload into object/bucket identifiers.
+// Returns nil for unrecognised task types.
+func ParseTaskObjectInfo(taskType string, payload []byte) (*TaskObjectInfo, error) {
+	var p struct {
+		Sync
+		Bucket string     `json:"Bucket"`
+		Object dom.Object `json:"Object"`
+		Obj    ObjPayload `json:"Obj"`
+		Prefix string     `json:"Prefix"`
+	}
+	if err := json.Unmarshal(payload, &p); err != nil {
+		return nil, fmt.Errorf("unmarshal %s payload: %w", taskType, err)
+	}
+
+	info := &TaskObjectInfo{
+		ToBucket:    p.ToBucket,
+		FromStorage: p.FromStorage,
+		ToStorage:   p.ToStorage,
+	}
+
+	switch taskType {
+	case TypeMigrateObjCopy:
+		info.Object = p.Obj.Name
+		info.Bucket = p.Bucket
+	case TypeMigrateVersionedObject:
+		info.Object = p.Prefix
+		info.Bucket = p.Bucket
+	case TypeObjectSync, TypeObjectSyncTags, TypeObjectSyncACL:
+		info.Object = p.Object.Name
+		info.Bucket = p.Object.Bucket
+	case TypeBucketCreate, TypeBucketDelete, TypeBucketSyncTags, TypeBucketSyncACL:
+		info.Bucket = p.Bucket
+	default:
+		return nil, nil
+	}
+
+	return info, nil
 }
 
 type ApiTask interface {
@@ -408,5 +457,6 @@ func NewTask[T ApiTask](ctx context.Context, payload T) (*asynq.Task, error) {
 		return nil, fmt.Errorf("%w: unknown task type %T", dom.ErrInvalidArg, p)
 	}
 
+	optionList = append(optionList, asynq.MaxRetry(math.MaxInt32))
 	return asynq.NewTask(taskType, bytes, optionList...), nil
 }

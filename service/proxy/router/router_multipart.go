@@ -90,7 +90,7 @@ func (r *router) completeMultipartUpload(req *http.Request) (resp *http.Response
 	if xmlErr != nil {
 		zerolog.Ctx(ctx).Err(xmlErr).Msg("unable to unmarshal response body")
 	} else {
-		zerolog.Ctx(ctx).Debug().Str("etag", res.ETag).Msg("multipart uploaded object with etag")
+		zerolog.Ctx(ctx).Info().Str("etag", res.ETag).Msg("multipart uploaded object with etag")
 	}
 
 	var objSize int64

@@ -29,20 +29,26 @@ import (
 )
 
 const (
-	defaultLockDuration = time.Second
+	defaultLockDuration      = time.Second
+	defaultReleaseRetryDelay = time.Minute
 )
 
 type Lock struct {
-	logger  *zerolog.Logger
-	lock    *redislock.Lock
-	overlap time.Duration
+	appCtx            context.Context
+	logger            *zerolog.Logger
+	lock              *redislock.Lock
+	overlap           time.Duration
+	releaseRetryDelay time.Duration
+	retryDone         chan struct{}
 }
 
-func NewLock(logger *zerolog.Logger, lock *redislock.Lock, overlap time.Duration) *Lock {
+func NewLock(appCtx context.Context, logger *zerolog.Logger, lock *redislock.Lock, overlap time.Duration) *Lock {
 	return &Lock{
-		logger:  logger,
-		lock:    lock,
-		overlap: overlap,
+		appCtx:            appCtx,
+		logger:            logger,
+		lock:              lock,
+		overlap:           overlap,
+		releaseRetryDelay: defaultReleaseRetryDelay,
 	}
 }
 
@@ -56,10 +62,31 @@ func (r *Lock) Refresh(ctx context.Context, duration time.Duration) error {
 func (r *Lock) Release(ctx context.Context) {
 	r.logger.Debug().Msg("lock-service: releasing the lock")
 	releaseErr := r.lock.Release(context.Background())
-	if releaseErr != nil && !errors.Is(releaseErr, redislock.ErrLockNotHeld) {
-		zerolog.Ctx(ctx).Warn().Err(releaseErr).Msg("unable to release lock")
+	if releaseErr == nil || errors.Is(releaseErr, redislock.ErrLockNotHeld) {
+		r.logger.Debug().Err(releaseErr).Msg("lock-service: lock released")
+		return
 	}
-	r.logger.Debug().Err(releaseErr).Msg("lock-service: lock released")
+	zerolog.Ctx(ctx).Warn().Err(releaseErr).Msg("lock-service: release failed, retrying in background")
+	r.retryDone = make(chan struct{})
+	go r.retryRelease()
+}
+
+func (r *Lock) retryRelease() {
+	defer close(r.retryDone)
+	for attempt := 1; ; attempt++ {
+		select {
+		case <-r.appCtx.Done():
+			r.logger.Warn().Msg("lock-service: giving up lock release retry: context cancelled")
+			return
+		case <-time.After(r.releaseRetryDelay):
+		}
+		releaseErr := r.lock.Release(context.Background())
+		if releaseErr == nil || errors.Is(releaseErr, redislock.ErrLockNotHeld) {
+			r.logger.Info().Int("retry", attempt).Msg("lock-service: lock released after retry")
+			return
+		}
+		r.logger.Warn().Err(releaseErr).Int("attempt", attempt+1).Msg("lock-service: release retry failed")
+	}
 }
 
 func (r *Lock) Do(ctx context.Context, refresh time.Duration, work func() error) error {
@@ -131,15 +158,17 @@ func WithRetry(retry bool) LockOpt {
 }
 
 type RedisIDKeyLocker[ID any] struct {
+	appCtx  context.Context
 	overlap time.Duration
 	locker  *redislock.Client
 	RedisIDCommonStore[ID]
 }
 
-func NewRedisIDKeyLocker[ID any](client redis.Cmdable, keyPrefix string,
+func NewRedisIDKeyLocker[ID any](appCtx context.Context, client redis.Cmdable, keyPrefix string,
 	tokenizeID SingleToMultiValueConverter[ID, string], restoreID MultiToSingleValueConverter[string, ID],
 	overlap time.Duration) *RedisIDKeyLocker[ID] {
 	return &RedisIDKeyLocker[ID]{
+		appCtx:             appCtx,
 		overlap:            overlap,
 		locker:             redislock.New(client),
 		RedisIDCommonStore: *NewRedisIDCommonStore[ID](client, keyPrefix, tokenizeID, restoreID),
@@ -172,5 +201,5 @@ func (r *RedisIDKeyLocker[ID]) Lock(ctx context.Context, id ID, opts ...LockOpt)
 		return nil, err
 	}
 	logger.Debug().Msg("lock-service: lock obtained")
-	return NewLock(&logger, lock, r.overlap), nil
+	return NewLock(r.appCtx, &logger, lock, r.overlap), nil
 }

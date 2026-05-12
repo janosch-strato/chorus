@@ -42,7 +42,7 @@ func newAWSClient(conf s3.Storage, name, user string, metricsSvc metrics.S3Servi
 
 	endpoint := conf.Address.GetEndpoint(conf.IsSecure)
 	awsConfig := aws.NewConfig().
-		WithMaxRetries(3).
+		WithMaxRetries(0).
 		WithCredentials(cred).
 		WithHTTPClient(&http.Client{Timeout: conf.HttpTimeout}).
 		WithS3ForcePathStyle(true).

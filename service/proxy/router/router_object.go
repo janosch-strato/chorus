@@ -53,7 +53,7 @@ func (r *router) putObject(req *http.Request) (resp *http.Response, taskList []t
 	if err != nil || isApiErr {
 		return
 	}
-	zerolog.Ctx(ctx).Debug().Str("etag", resp.Header.Get("ETag")).Msg("uploaded object with etag")
+	zerolog.Ctx(ctx).Info().Str("etag", resp.Header.Get("ETag")).Msg("uploaded object with etag")
 
 	obj := dom.Object{Bucket: bucket, Name: object}
 	var objSize int64

@@ -142,10 +142,10 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 	limiter := ratelimit.New(appRedis, conf.Storage.RateLimitConf())
 	lockRedis := util.NewRedis(conf.Redis, conf.Redis.LockDB)
 	defer lockRedis.Close()
-	replicationStatusLocker := store.NewReplicationStatusLocker(lockRedis, conf.Lock.Overlap)
-	userLocker := store.NewUserLocker(lockRedis, conf.Lock.Overlap)
-	objectLocker := store.NewObjectLocker(lockRedis, conf.Lock.Overlap)
-	bucketLocker := store.NewBucketLocker(lockRedis, conf.Lock.Overlap)
+	replicationStatusLocker := store.NewReplicationStatusLocker(ctx, lockRedis, conf.Lock.Overlap)
+	userLocker := store.NewUserLocker(ctx, lockRedis, conf.Lock.Overlap)
+	objectLocker := store.NewObjectLocker(ctx, lockRedis, conf.Lock.Overlap)
+	bucketLocker := store.NewBucketLocker(ctx, lockRedis, conf.Lock.Overlap)
 
 	memoryLimiterSvc := rclone.NewMemoryLimiterSvc(memCalc, memLimiter, filesLimiter, metricsSvc)
 	objectVersionInfoStore := store.NewObjectVersionInfoStore(confRedis)
@@ -269,7 +269,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 
 		if conf.Api.Status.Enabled {
 			logger.Info().Str("prefix", conf.Api.Status.Prefix).Str("statuspath", conf.Api.Status.StatusPath).Msg("setting up status api")
-			handler, err := status.Handler(conf.Api.Status, logger, handlers, policySvc)
+			handler, err := status.Handler(conf.Api.Status, logger, handlers, policySvc, queueSvc)
 			if err != nil {
 				return err
 			}
@@ -298,10 +298,16 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 	return server.Start(ctx)
 }
 
+const maxRetryDelay = 24 * time.Hour
+
 func retryDelay(n int, err error, task *asynq.Task) time.Duration {
 	var rlErr *dom.ErrRateLimitExceeded
 	if errors.As(err, &rlErr) {
 		return rlErr.RetryIn
 	}
-	return asynq.DefaultRetryDelayFunc(n, err, task)
+	d := asynq.DefaultRetryDelayFunc(n, err, task)
+	if d > maxRetryDelay {
+		return maxRetryDelay
+	}
+	return d
 }

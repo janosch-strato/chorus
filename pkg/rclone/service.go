@@ -122,6 +122,7 @@ func New(conf *s3.StorageConfig, jsonLog bool, metricsSvc metrics.S3Service, mam
 	}
 
 	ci := fs.GetConfig(context.TODO())
+	ci.LowLevelRetries = 1
 	ci.UseJSONLog = jsonLog
 	ci.LogLevel = mapLogLvl()
 	ci.Metadata = true
@@ -272,7 +273,7 @@ func (s *svc) CopyTo(ctx context.Context, from, to File, size int64) (err error)
 	if err != nil {
 		return err
 	}
-	zerolog.Ctx(ctx).Debug().
+	zerolog.Ctx(ctx).Info().
 		Str("file_size", util.ByteCountSI(size)).
 		Msg("starting obj copy")
 	err = operations.CopyFile(ctx, dest, src, to.path(), from.path())
