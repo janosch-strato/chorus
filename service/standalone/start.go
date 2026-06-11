@@ -169,6 +169,12 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 		if err != nil {
 			return err
 		}
+		// In standalone mode the worker already serves /metrics (and pprof)
+		// on conf.Metrics.Port. Letting the proxy bind the same port would
+		// fail with EADDRINUSE, so disable its metrics server here.
+		if proxyConf.Metrics != nil {
+			proxyConf.Metrics.Enabled = false
+		}
 		// start proxy
 		g.Go(func() error {
 			return proxy.Start(ctx, app, &proxyConf)
