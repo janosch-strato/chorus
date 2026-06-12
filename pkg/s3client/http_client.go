@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -41,6 +42,34 @@ import (
 	"github.com/clyso/chorus/pkg/s3"
 )
 
+// Connection-pool sizing for the S3 transport used by minio-go.
+// The minio-go default caps idle connections per host at ~16, which
+// forces fresh TCP+TLS handshakes once tasks-in-flight to one storage
+// exceeds that. Sized to comfortably cover worker.concurrency in the
+// low hundreds against a single source/destination host.
+const (
+	s3MaxIdleConns        = 1024
+	s3MaxIdleConnsPerHost = 256
+)
+
+// newS3Transport mirrors http.DefaultTransport apart from the idle
+// connection pool, which is sized for high-concurrency workers.
+func newS3Transport() *http.Transport {
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          s3MaxIdleConns,
+		MaxIdleConnsPerHost:   s3MaxIdleConnsPerHost,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
+
 func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsSvc metrics.S3Service, _ trace.TracerProvider) (Client, error) {
 	c := &client{
 		c: &http.Client{
@@ -55,8 +84,9 @@ func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsS
 	}
 
 	mc, err := mclient.New(conf.Address.Value(), &mclient.Options{
-		Creds:  credentials.NewStaticV4(c.cred.AccessKeyID, c.cred.SecretAccessKey, ""),
-		Secure: conf.IsSecure,
+		Creds:     credentials.NewStaticV4(c.cred.AccessKeyID, c.cred.SecretAccessKey, ""),
+		Secure:    conf.IsSecure,
+		Transport: newS3Transport(),
 	})
 	if err != nil {
 		return nil, err
