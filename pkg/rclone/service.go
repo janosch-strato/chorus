@@ -111,6 +111,8 @@ func New(conf *s3.StorageConfig, jsonLog bool, metricsSvc metrics.S3Service, mam
 				"secret_access_key": cred.SecretAccessKey,
 				"endpoint":          stor.Address.ValueWithProtocol(),
 				"provider":          stor.Provider,
+				"no_head":           true,
+				"no_head_object":    true,
 			}
 			for k, v := range keyValues {
 				vStr := fmt.Sprint(v)
@@ -240,12 +242,12 @@ func (s *svc) CopyTo(ctx context.Context, from, to File, size int64) (err error)
 	}
 	defer release()
 	ctx, ci := fs.AddConfig(ctx)
-	ci.CheckSum = true
 	ci.UseJSONLog = true
 	//ci.UseServerModTime = true // todo: test if needed
 	//ci.UpdateOlder = true      // todo: test if needed
 	ci.Metadata = true
 	ci.ErrorOnNoTransfer = true
+	ci.NoCheckDest = true
 	//ci.IgnoreErrors = false
 	//ci.UseListR = true         // Use recursive list if available; uses more memory but fewer transactions
 
@@ -253,10 +255,8 @@ func (s *svc) CopyTo(ctx context.Context, from, to File, size int64) (err error)
 		if err != nil {
 			return
 		}
-		s.metricsSvc.Count(xctx.GetFlow(ctx), from.Storage, s3.HeadObject)
 		s.metricsSvc.Count(xctx.GetFlow(ctx), from.Storage, s3.GetObject)
 		s.metricsSvc.Count(xctx.GetFlow(ctx), from.Storage, s3.GetObjectAcl)
-		s.metricsSvc.Count(xctx.GetFlow(ctx), to.Storage, s3.HeadObject)
 		s.metricsSvc.Count(xctx.GetFlow(ctx), to.Storage, s3.PutObject)
 		s.metricsSvc.Count(xctx.GetFlow(ctx), to.Storage, s3.PutObjectAcl)
 		if size != 0 {
