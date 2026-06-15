@@ -104,15 +104,21 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 		Str("commit", app.Commit).
 		Msg("app starting...")
 
-	// start embedded redis:
-	redisSvc, err := miniredis.Run()
-	if err != nil {
-		return fmt.Errorf("%w: unable to start redis", err)
+	// start embedded redis only when no external redis is configured:
+	redisAddrs := conf.Redis.GetAddresses()
+	var redisSvc *miniredis.Miniredis
+	if len(redisAddrs) == 0 {
+		var miniErr error
+		redisSvc, miniErr = miniredis.Run()
+		if miniErr != nil {
+			return fmt.Errorf("%w: unable to start redis", miniErr)
+		}
+		go func() {
+			<-ctx.Done()
+			redisSvc.Close()
+		}()
+		redisAddrs = []string{redisSvc.Addr()}
 	}
-	go func() {
-		<-ctx.Done()
-		redisSvc.Close()
-	}()
 
 	// start fake s3 storages
 	g, ctx := errgroup.WithContext(ctx)
@@ -130,7 +136,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 
 	workerConf := conf.Config
 	if len(workerConf.Redis.Addresses) == 0 {
-		workerConf.Redis.Addresses = s3.NewConfAddrs(redisSvc.Addr())
+		workerConf.Redis.Addresses = s3.NewConfAddrs(redisAddrs...)
 	}
 
 	// deep copy worker config
@@ -157,7 +163,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 			Cors:    conf.Proxy.Cors,
 		}
 		if len(proxyConf.Redis.Addresses) == 0 {
-			proxyConf.Redis.Addresses = s3.NewConfAddrs(redisSvc.Addr())
+			proxyConf.Redis.Addresses = s3.NewConfAddrs(redisAddrs...)
 		}
 
 		// deep copy proxy config
@@ -199,7 +205,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 		printCreds(conf, useFakeStorageCreds),
 		localhost(conf.Api.GrpcPort),
 		httpPort,
-		redisSvc.Addr(),
+		strings.Join(redisAddrs, ","),
 		printStorages(fake, conf.Storage),
 	)
 
