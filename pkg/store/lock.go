@@ -99,9 +99,12 @@ func (r *Lock) Do(ctx context.Context, refresh time.Duration, work func() error)
 		return err
 	}
 	errCh := make(chan error)
-	defer close(errCh)
 	go func() {
-		errCh <- work()
+		err := work()
+		select {
+		case errCh <- err:
+		case <-ctx.Done():
+		}
 	}()
 	timer := time.NewTimer(refresh)
 	defer timer.Stop()
