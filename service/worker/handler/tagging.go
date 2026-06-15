@@ -89,7 +89,7 @@ func (s *svc) HandleObjectTags(ctx context.Context, t *asynq.Task) error {
 
 func (s *svc) syncBucketTagging(ctx context.Context, fromClient, toClient s3client.Client, fromBucket string, toBucket string) error {
 	if !features.Tagging(ctx) {
-		zerolog.Ctx(ctx).Info().Msg("Tagging feature is disabled: skip bucket tags sync")
+		zerolog.Ctx(ctx).Debug().Msg("Tagging feature is disabled: skip bucket tags sync")
 		return nil
 	}
 	versions, err := s.versionSvc.GetBucketTags(ctx, fromBucket)
@@ -150,7 +150,7 @@ func (s *svc) syncBucketTagging(ctx context.Context, fromClient, toClient s3clie
 
 func (s *svc) syncObjectTagging(ctx context.Context, fromClient, toClient s3client.Client, fromBucket, object string, toBucket string) error {
 	if !features.Tagging(ctx) {
-		zerolog.Ctx(ctx).Info().Msg("Tagging feature is disabled: skip object tags sync")
+		zerolog.Ctx(ctx).Debug().Msg("Tagging feature is disabled: skip object tags sync")
 		return nil
 	}
 	versions, err := s.versionSvc.GetTags(ctx, dom.Object{Bucket: fromBucket, Name: object})

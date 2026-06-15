@@ -89,7 +89,7 @@ func (s *svc) HandleObjectACL(ctx context.Context, t *asynq.Task) error {
 
 func (s *svc) syncBucketACL(ctx context.Context, fromClient, toClient s3client.Client, fromBucket string, toBucket string) error {
 	if !features.ACL(ctx) {
-		zerolog.Ctx(ctx).Info().Msg("ACL feature is disabled: skip bucket ACL sync")
+		zerolog.Ctx(ctx).Debug().Msg("ACL feature is disabled: skip bucket ACL sync")
 		return nil
 	}
 	versions, err := s.versionSvc.GetBucketACL(ctx, fromBucket)
@@ -151,7 +151,7 @@ func (s *svc) syncBucketACL(ctx context.Context, fromClient, toClient s3client.C
 
 func (s *svc) syncObjectACL(ctx context.Context, fromClient, toClient s3client.Client, fromBucket, object string, toBucket string) error {
 	if !features.ACL(ctx) {
-		zerolog.Ctx(ctx).Info().Msg("ACL feature is disabled: skip object ACL sync")
+		zerolog.Ctx(ctx).Debug().Msg("ACL feature is disabled: skip object ACL sync")
 		return nil
 	}
 	versions, err := s.versionSvc.GetACL(ctx, dom.Object{Bucket: fromBucket, Name: object})
