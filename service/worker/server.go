@@ -120,7 +120,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 		filesLimiter = ratelimit.LocalSemaphore(conf.RClone.LocalFileLimit, "rclone_files")
 	}
 	memCalc := rclone.NewMemoryCalculator(conf.RClone.MemoryCalc)
-	rc, err := rclone.New(conf.Storage, conf.Log.Json, metricsSvc, memCalc, memLimiter, filesLimiter)
+	rc, err := rclone.New(conf.Storage, conf.Log.Json, conf.Concurrency, metricsSvc, memCalc, memLimiter, filesLimiter)
 	if err != nil {
 		return err
 	}

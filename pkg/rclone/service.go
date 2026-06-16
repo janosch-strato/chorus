@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	_ "github.com/rclone/rclone/backend/s3"
 	"github.com/rclone/rclone/fs"
@@ -90,7 +91,7 @@ type Service interface {
 	Compare(ctx context.Context, listMatch bool, from, to, fromBucket string, toBucket string) (*CompareRes, error)
 }
 
-func New(conf *s3.StorageConfig, jsonLog bool, metricsSvc metrics.S3Service, mamCalc *MemCalculator, memLimiter, fileLimiter ratelimit.Semaphore) (Service, error) {
+func New(conf *s3.StorageConfig, jsonLog bool, concurrency int, metricsSvc metrics.S3Service, mamCalc *MemCalculator, memLimiter, fileLimiter ratelimit.Semaphore) (Service, error) {
 	if len(conf.Storages) == 0 {
 		return nil, dom.ErrInvalidStorageConfig
 	}
@@ -128,6 +129,19 @@ func New(conf *s3.StorageConfig, jsonLog bool, metricsSvc metrics.S3Service, mam
 	ci.UseJSONLog = jsonLog
 	ci.LogLevel = mapLogLvl()
 	ci.Metadata = true
+	/*
+	 * Size rclone's idle connection pool to match worker concurrency.
+	 * rclone derives MaxIdleConnsPerHost as 2*(Checkers+Transfers+1) at
+	 * Fs creation time (fs/fshttp/http.go), so without this each copy
+	 * task sees a pool of only 2*(8+4+1)=26 and saturating it forces
+	 * fresh TLS handshakes on every overflow. Bumping both to concurrency
+	 * gives a pool comfortably above the in-flight count once Fs
+	 * instances are cached and reused (see getFS).
+	 */
+	if concurrency > 0 {
+		ci.Checkers = concurrency
+		ci.Transfers = concurrency
+	}
 
 	return &s, nil
 }
@@ -151,6 +165,17 @@ type svc struct {
 	memCalc     *MemCalculator
 	memLimiter  ratelimit.Semaphore
 	fileLimiter ratelimit.Semaphore
+
+	/*
+	 * fsCache manages rclone fs.Fs instances so their HTTP transport (and
+	 * connection pool) is shared across all copy tasks for the same
+	 * (storage, bucket, user) tuple.
+	 */
+	fsCache sync.Map // map[fsCacheKey]fs.Fs
+}
+
+type fsCacheKey struct {
+	storage, bucket, user string
 }
 
 func (s *svc) getConf(storage, user string) (*configmap.Map, error) {
@@ -285,13 +310,26 @@ func (s *svc) CopyTo(ctx context.Context, from, to File, size int64) (err error)
 }
 
 func (s *svc) getFS(ctx context.Context, storage, bucket string) (fs.Fs, error) {
-	storageConf, err := s.getConf(storage, xctx.GetUser(ctx))
+	user := xctx.GetUser(ctx)
+	key := fsCacheKey{storage: storage, bucket: bucket, user: user}
+	if cached, ok := s.fsCache.Load(key); ok {
+		return cached.(fs.Fs), nil
+	}
+	storageConf, err := s.getConf(storage, user)
 	if err != nil {
 		return nil, err
 	}
-
-	configName, fsPath := storage, bucket
-	return s.s3.NewFs(ctx, configName, fsPath, storageConf)
+	f, err := s.s3.NewFs(ctx, storage, bucket, storageConf)
+	if err != nil {
+		return nil, err
+	}
+	/*
+	 * A concurrent caller may have populated the cache while we were
+	 * creating this Fs; LoadOrStore returns whichever instance won. The
+	 * loser's Fs is discarded and gets GC'd along with its transport.
+	 */
+	actual, _ := s.fsCache.LoadOrStore(key, f)
+	return actual.(fs.Fs), nil
 }
 
 func (s *svc) checkLimit(ctx context.Context, fileSize int64) (release func(), err error) {
