@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 
 	_ "github.com/rclone/rclone/backend/s3"
@@ -302,9 +303,17 @@ func (s *svc) CopyTo(ctx context.Context, from, to File, size int64) (err error)
 		Str("file_size", util.ByteCountSI(size)).
 		Msg("starting obj copy")
 	err = operations.CopyFile(ctx, dest, src, to.path(), from.path())
-	if err != nil && err.Error() == "object not found" {
-		// todo: handle dom.ErrNotFound in worker
-		return dom.ErrNotFound
+	if err != nil {
+		// rclone's HEAD path maps a 404 to fs.ErrorObjectNotFound. The GET
+		// path, taken when no_head_object is set, does not perform that
+		// mapping and instead surfaces the raw AWS SDK error, so also detect
+		// the underlying HTTP 404 directly.
+		var httpErr interface{ HTTPStatusCode() int }
+		if errors.Is(err, fs.ErrorObjectNotFound) ||
+			(errors.As(err, &httpErr) && httpErr.HTTPStatusCode() == http.StatusNotFound) {
+			// todo: handle dom.ErrNotFound in worker
+			return dom.ErrNotFound
+		}
 	}
 	return
 }
