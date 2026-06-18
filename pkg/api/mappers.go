@@ -44,11 +44,11 @@ func replicationToPb(id entity.ReplicationStatusID, value entity.ReplicationStat
 		IsPaused:        value.IsPaused,
 		IsInitDone:      value.InitDone(),
 		InitObjListed:   toListed(value.InitMigration),
-		InitObjDone:     int64(value.InitMigration.Done),
+		InitObjDone:     toDone(value.InitMigration),
 		InitBytesListed: 0, //TODO: remove from api
 		InitBytesDone:   0, //TODO: remove from api
 		Events:          toListed(value.EventMigration),
-		EventsDone:      int64(value.EventMigration.Done),
+		EventsDone:      toDone(value.EventMigration),
 		InitDoneAt:      nil, //TODO: remove from api
 		LastEmittedAt:   nil, // TODO: change api to latency
 		LastProcessedAt: nil, // TODO: change api to latency
@@ -60,7 +60,11 @@ func replicationToPb(id entity.ReplicationStatusID, value entity.ReplicationStat
 }
 
 func toListed(in entity.QueueStats) int64 {
-	return int64(in.Pending + in.Done + in.Rescheduled)
+	return int64(in.Pending) + toDone(in)
+}
+
+func toDone(in entity.QueueStats) int64 {
+	return int64(in.Done - in.Rescheduled - in.Failed)
 }
 
 func strPtr(s string) *string {
