@@ -54,7 +54,12 @@ import (
 	"github.com/clyso/chorus/service/worker/policy_helper"
 )
 
-func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
+// Start runs the worker subsystem. serveMetrics controls whether this
+// subsystem also binds the metrics/pprof HTTP listener; it should be true
+// when worker.Start owns the process (cmd/worker) and false when something
+// else in the same process already serves metrics (e.g. standalone, where
+// only one subsystem may bind the port).
+func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool) error {
 	if err := conf.Validate(); err != nil {
 		return err
 	}
@@ -285,7 +290,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 
 	}
 
-	if conf.Metrics.Enabled {
+	if serveMetrics && conf.Metrics.Enabled {
 		start, stop := metrics.Server(ctx, conf.Metrics.Port, app)
 		err = server.Add("worker_metrics", start, stop)
 		if err != nil {

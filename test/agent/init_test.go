@@ -101,7 +101,7 @@ func TestMain(m *testing.M) {
 		workerCtx, cancelFn := context.WithCancel(ctx)
 		defer cancelFn()
 
-		err = worker.Start(workerCtx, app, workerConf)
+		err = worker.Start(workerCtx, app, workerConf, false)
 		if err != nil {
 			panic(err)
 		}
@@ -116,7 +116,7 @@ func TestMain(m *testing.M) {
 		agentCtx, cancelFn := context.WithCancel(ctx)
 		defer cancelFn()
 
-		err = agent.Start(agentCtx, app, agentConf)
+		err = agent.Start(agentCtx, app, agentConf, false)
 		if err != nil {
 			panic(err)
 		}

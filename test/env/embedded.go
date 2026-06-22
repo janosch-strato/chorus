@@ -203,7 +203,7 @@ func SetupEmbedded(t testing.TB, workerConf *worker.Config, proxyConf *proxy.Con
 			App:     "proxy",
 			AppID:   xid.New().String(),
 		}
-		return proxy.Start(ctx, app, proxyConf)
+		return proxy.Start(ctx, app, proxyConf, false)
 	})
 	wg.Go(func() error {
 		app := dom.AppInfo{
@@ -211,7 +211,7 @@ func SetupEmbedded(t testing.TB, workerConf *worker.Config, proxyConf *proxy.Con
 			App:     "worker",
 			AppID:   xid.New().String(),
 		}
-		return worker.Start(ctx, app, workerConf)
+		return worker.Start(ctx, app, workerConf, false)
 	})
 	t.Cleanup(func() {
 		err := wg.Wait()

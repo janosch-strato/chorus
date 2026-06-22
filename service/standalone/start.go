@@ -148,9 +148,11 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 	if err != nil {
 		return err
 	}
-	// start worker
+	// start worker — the worker subsystem owns the single metrics/pprof
+	// listener in standalone; proxy.Start is invoked with serveMetrics=false
+	// so the two don't fight over the same port.
 	g.Go(func() error {
-		return worker.Start(ctx, app, &workerConf)
+		return worker.Start(ctx, app, &workerConf, true)
 	})
 
 	if conf.Proxy.Enabled {
@@ -175,9 +177,9 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 		if err != nil {
 			return err
 		}
-		// start proxy
+		// start proxy without its own metrics listener (see worker above).
 		g.Go(func() error {
-			return proxy.Start(ctx, app, &proxyConf)
+			return proxy.Start(ctx, app, &proxyConf, false)
 		})
 	}
 

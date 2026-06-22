@@ -39,7 +39,11 @@ import (
 	"github.com/clyso/chorus/pkg/util"
 )
 
-func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
+// Start runs the agent subsystem. serveMetrics controls whether this
+// subsystem also binds the metrics/pprof HTTP listener; it should be true
+// when agent.Start owns the process (cmd/agent) and false when something
+// else in the same process already serves metrics.
+func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool) error {
 	if err := conf.Validate(); err != nil {
 		return err
 	}
@@ -107,7 +111,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 	}
 	logger.Info().Msg("agent created")
 
-	if conf.Metrics.Enabled {
+	if serveMetrics && conf.Metrics.Enabled {
 		start, stop := metrics.Server(ctx, conf.Metrics.Port, app)
 		err = server.Add("agent_metrics", start, stop)
 		if err != nil {

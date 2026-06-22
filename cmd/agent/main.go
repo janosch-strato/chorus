@@ -71,7 +71,7 @@ func main() {
 		Date:    date,
 		App:     "agent",
 		AppID:   xid.New().String(),
-	}, conf)
+	}, conf, true)
 	if err != nil {
 		stdlog.Err(err).Msg("critical error. Shutdown application")
 		os.Exit(1)
