@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v3"
 
@@ -34,31 +35,6 @@ import (
 	"github.com/clyso/chorus/pkg/s3"
 	"github.com/clyso/chorus/service/proxy"
 	"github.com/clyso/chorus/service/worker"
-)
-
-const (
-	//nolint:staticcheck //character used to set terminal color
-	connectInfo = `[92m_________ .__                               
-\_   ___ \|  |__   ___________ __ __  ______
-/    \  \/|  |  \ /  _ \_  __ \  |  \/  ___/
-\     \___|   Y  (  <_> )  | \/  |  /\___ \ 
- \______  /___|  /\____/|__|  |____//____  >
-        \/     \/                        \/[0m
-
-
-%s
-
-S3 Proxy URL: 	%s
-S3 Proxy Credentials (AccessKey|SecretKey): 		
-%s
-
-GRPC mgmt API:	%s
-HTTP mgmt API:	%s
-Redis URL:	%s
-
-Storage list:
-%s
-`
 )
 
 func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
@@ -129,7 +105,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 		})
 	}
 
-	proxyURL := "\u001B[91m<disabled in config>\u001B[0m"
+	proxyURL := "<disabled in config>"
 	if conf.Proxy.Enabled {
 		proxyURL = httpLocalhost(conf.Proxy.Port)
 	}
@@ -190,7 +166,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 		g.Go(func() error {
 			return uiServer()
 		})
-		uiURL = fmt.Sprintf("Mgmt UI URL:	%s", httpLocalhost(conf.UIPort))
+		uiURL = httpLocalhost(conf.UIPort)
 	} else if !errors.Is(err, dom.ErrNotFound) {
 		return err
 	}
@@ -201,15 +177,17 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 	if conf.Api.Secure {
 		httpPort = "disabled due to grpc TLS"
 	}
-	fmt.Printf(connectInfo,
-		uiURL,
-		proxyURL,
-		printCreds(conf, useFakeStorageCreds),
-		localhost(conf.Api.GrpcPort),
-		httpPort,
-		strings.Join(redisAddrs, ","),
-		printStorages(fake, conf.Storage),
-	)
+	ev := logger.Info().
+		Str("s3_proxy_url", proxyURL).
+		Array("s3_proxy_credentials", credsList(conf, useFakeStorageCreds)).
+		Str("grpc_api", localhost(conf.Api.GrpcPort)).
+		Str("http_api", httpPort).
+		Strs("redis", redisAddrs).
+		Array("storages", storageList(fake, conf.Storage))
+	if uiURL != "" {
+		ev = ev.Str("mgmt_ui_url", uiURL)
+	}
+	ev.Msg("standalone services started")
 
 	return g.Wait()
 }
@@ -222,9 +200,10 @@ func localhost(port int) string {
 	return fmt.Sprintf("127.0.0.1:%d", port)
 }
 
-func printCreds(conf *Config, printSecrets bool) string {
+func credsList(conf *Config, printSecrets bool) *zerolog.Array {
+	arr := zerolog.Arr()
 	if !conf.Proxy.Enabled {
-		return ""
+		return arr
 	}
 	var creds map[string]s3.CredentialsV4
 	if conf.Proxy.Auth.UseStorage != "" {
@@ -232,37 +211,30 @@ func printCreds(conf *Config, printSecrets bool) string {
 	} else {
 		creds = conf.Proxy.Auth.Custom
 	}
-	if len(creds) == 0 {
-		return "<no credentials provided in config>"
-	}
-	res := make([]string, 0, len(creds))
-	for s, v4 := range creds {
+	for name, v4 := range creds {
 		secret := "<hidden>"
 		if printSecrets {
 			secret = v4.SecretAccessKey
 		}
-		res = append(res, fmt.Sprintf(" - %s: [%s|%s]", s, v4.AccessKeyID, secret))
+		arr = arr.Dict(zerolog.Dict().
+			Str("name", name).
+			Str("access_key", v4.AccessKeyID).
+			Str("secret_key", secret))
 	}
-	return strings.Join(res, "\n")
+	return arr
 }
 
-func printStorages(fake map[string]int, conf *s3.StorageConfig) string {
-	if len(conf.Storages) == 0 {
-		return "<no storages provided in config>"
-	}
-	res := make([]string, 0, len(conf.Storages))
+func storageList(fake map[string]int, conf *s3.StorageConfig) *zerolog.Array {
+	arr := zerolog.Arr()
 	for name, stor := range conf.Storages {
-		f := ""
-		if _, ok := fake[name]; ok {
-			f = "[\u001B[33mFAKE\u001B[0m] "
-		}
-		m := ""
-		if stor.IsMain {
-			m = " < \u001B[94mMAIN\u001B[0m"
-		}
-		res = append(res, fmt.Sprintf(" - %s%s: %s%s", f, name, stor.Address.ValueWithProtocol(), m))
+		_, isFake := fake[name]
+		arr = arr.Dict(zerolog.Dict().
+			Str("name", name).
+			Str("address", stor.Address.ValueWithProtocol()).
+			Bool("fake", isFake).
+			Bool("main", stor.IsMain))
 	}
-	return strings.Join(res, "\n")
+	return arr
 }
 
 func getRandomPort() (string, int, error) {
