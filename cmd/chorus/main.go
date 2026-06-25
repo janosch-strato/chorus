@@ -59,7 +59,10 @@ Example 1: start chorus in standalone mode with fake s3
 Example 2: start chorus in standalone mode with custom config
   chorus -config ./my-config.yaml
 
-Example 3: print chorus config
+Example 3: start chorus, flushing Redis on startup
+  chorus -flush-redis=true
+
+Example 4: print chorus config
   chorus print-config
   chorus -config ./my-config.yaml print-config 
 
@@ -73,10 +76,12 @@ Flags:
 
 func main() {
 	var h, help, printVer, v bool
+	var flushRedis bool
 	flag.BoolVar(&h, "h", false, "Print help. Example: chorus -h")
 	flag.BoolVar(&v, "v", false, "Verbose output. Example: chorus -v")
 	flag.BoolVar(&help, "help", false, "Print help. Example: chorus -help")
 	flag.BoolVar(&printVer, "version", false, "Print version. Example: chorus -version")
+	flag.BoolVar(&flushRedis, "flush-redis", false, "Flush configured Redis databases on startup before services start. Example: chorus -flush-redis=true")
 	flag.Parse()
 	if h || help {
 		fmt.Print(helpText)
@@ -150,7 +155,7 @@ func main() {
 		Version: version,
 		Commit:  commit,
 		Date:    date,
-	}, conf)
+	}, conf, flushRedis)
 	if err != nil {
 		stdlog.Err(err).Msg("critical error. Shutdown application")
 		os.Exit(1)

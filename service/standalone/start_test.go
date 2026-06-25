@@ -42,7 +42,7 @@ func TestStandaloneDefaultConfig(t *testing.T) {
 
 	done := false
 	go func() {
-		_ = Start(ctx, dom.AppInfo{}, conf)
+		_ = Start(ctx, dom.AppInfo{}, conf, false)
 		done = true
 	}()
 

@@ -33,11 +33,12 @@ import (
 	"github.com/clyso/chorus/pkg/features"
 	"github.com/clyso/chorus/pkg/log"
 	"github.com/clyso/chorus/pkg/s3"
+	"github.com/clyso/chorus/pkg/util"
 	"github.com/clyso/chorus/service/proxy"
 	"github.com/clyso/chorus/service/worker"
 )
 
-func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
+func Start(ctx context.Context, app dom.AppInfo, conf *Config, flushRedis bool) error {
 	// detect fake s3 storages in config
 	fake := map[string]int{}
 	for name, storage := range conf.Storage.Storages {
@@ -94,6 +95,12 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config) error {
 			redisSvc.Close()
 		}()
 		redisAddrs = []string{redisSvc.Addr()}
+	}
+
+	if flushRedis {
+		if err := flushRedisDBs(ctx, conf); err != nil {
+			return err
+		}
 	}
 
 	// start fake s3 storages
@@ -235,6 +242,31 @@ func storageList(fake map[string]int, conf *s3.StorageConfig) *zerolog.Array {
 			Bool("main", stor.IsMain))
 	}
 	return arr
+}
+
+func flushRedisDBs(ctx context.Context, conf *Config) error {
+	seen := map[int]struct{}{}
+	dbs := []int{conf.Redis.MetaDB, conf.Redis.QueueDB, conf.Redis.LockDB, conf.Redis.ConfigDB}
+	flushed := make([]int, 0, len(dbs))
+	for _, db := range dbs {
+		if _, ok := seen[db]; ok {
+			continue
+		}
+		seen[db] = struct{}{}
+		client := util.NewRedis(conf.Redis, db)
+		// FLUSHDB ASYNC lets Redis reclaim the keyspace in a background thread and
+		// acks immediately, so a large synchronous flush cannot exceed the client
+		// read timeout and abort startup. Keys are gone at once; memory is freed
+		// in the background before services (which start after this) write to Redis.
+		err := client.FlushDBAsync(ctx).Err()
+		_ = client.Close()
+		if err != nil {
+			return fmt.Errorf("flush redis db %d: %w", db, err)
+		}
+		flushed = append(flushed, db)
+	}
+	zerolog.Ctx(ctx).Info().Ints("dbs", flushed).Msg("flushed redis databases")
+	return nil
 }
 
 func getRandomPort() (string, int, error) {
