@@ -313,6 +313,9 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 		if err != nil {
 			return err
 		}
+		if err = metrics.RegisterQueueCollector(inspector); err != nil {
+			zerolog.Ctx(ctx).Warn().Err(err).Msg("unable to register queue depth collector")
+		}
 		zerolog.Ctx(ctx).Info().Msg("metrics enabled")
 	}
 
