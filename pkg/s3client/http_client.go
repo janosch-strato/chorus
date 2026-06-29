@@ -72,14 +72,16 @@ func (t measuredTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 
 // newS3Transport mirrors http.DefaultTransport apart from the idle
 // connection pool, which is sized for high-concurrency workers. One is made
-// per storage, see New().
-func newS3Transport() *http.Transport {
+// per storage, see New(). The dialer is wrapped so opened/closed/open
+// connections to this storage are tracked under the "http" connection layer.
+func newS3Transport(storage string) *http.Transport {
+	baseDial := (&net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
 	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           metrics.InstrumentedDial(storage, metrics.ConnLayerHTTP, baseDial),
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          s3MaxIdleConns,
 		MaxIdleConnsPerHost:   s3MaxIdleConnsPerHost,
@@ -227,12 +229,14 @@ func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err 
 		}
 	}()
 	defer func() {
+		method := xctx.GetMethod(req.Context())
+		flow := xctx.GetFlow(req.Context())
+		// Record the request with its outcome class so error counts
+		// land on storage_requests_total under the "status" label.
+		c.metricsSvc.CountStatus(flow, c.name, method, s3RequestStatus(resp, err))
 		if err != nil {
 			return
 		}
-		method := xctx.GetMethod(req.Context())
-		flow := xctx.GetFlow(req.Context())
-		c.metricsSvc.Count(flow, c.name, method)
 		c.metricsSvc.Duration(flow, c.name, method, time.Since(start))
 		switch method {
 		case s3.GetObject:
@@ -346,4 +350,33 @@ func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err 
 
 func (c *client) IsOnline() bool {
 	return c.online.Load()
+}
+
+// s3RequestStatus maps a transport result to a bounded outcome class
+// for the storage_requests_total "status" label. On a non-2xx
+// response Do() sets err to a minio ErrorResponse that still carries
+// the HTTP status code, so a single err-based classification covers
+// both the explicit-error and transport-failure cases.
+func s3RequestStatus(resp *http.Response, err error) metrics.ReqStatus {
+	if err == nil {
+		switch {
+		case resp != nil && resp.StatusCode >= 500:
+			return metrics.StatusServerErr
+		case resp != nil && resp.StatusCode >= 400:
+			return metrics.StatusClientErr
+		default:
+			return metrics.StatusOK
+		}
+	}
+	if mclient.IsNetworkOrHostDown(err, false) {
+		return metrics.StatusNetworkErr
+	}
+	switch code := mclient.ToErrorResponse(err).StatusCode; {
+	case code >= 500:
+		return metrics.StatusServerErr
+	case code >= 400:
+		return metrics.StatusClientErr
+	default:
+		return metrics.StatusNetworkErr
+	}
 }

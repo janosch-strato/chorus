@@ -39,7 +39,7 @@ func TestRelease_RetriesOnTransientError(t *testing.T) {
 
 	logger := zerolog.New(zerolog.NewTestWriter(t))
 	appCtx := context.Background()
-	storeLock := NewLock(appCtx, &logger, lock, 0)
+	storeLock := NewLock(appCtx, &logger, lock, 0, "test")
 	storeLock.releaseRetryDelay = 50 * time.Millisecond
 
 	// Make the first release attempt fail.
@@ -71,7 +71,7 @@ func TestRelease_NoRetryOnSuccess(t *testing.T) {
 
 	logger := zerolog.New(zerolog.NewTestWriter(t))
 	appCtx := context.Background()
-	storeLock := NewLock(appCtx, &logger, lock, 0)
+	storeLock := NewLock(appCtx, &logger, lock, 0, "test")
 
 	storeLock.Release(context.Background())
 
@@ -90,7 +90,7 @@ func TestRelease_StopsOnContextCancel(t *testing.T) {
 
 	logger := zerolog.New(zerolog.NewTestWriter(t))
 	appCtx, cancel := context.WithCancel(context.Background())
-	storeLock := NewLock(appCtx, &logger, lock, 0)
+	storeLock := NewLock(appCtx, &logger, lock, 0, "test")
 	storeLock.releaseRetryDelay = 50 * time.Millisecond
 
 	// Set a persistent error so the release always fails.

@@ -29,6 +29,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/clyso/chorus/pkg/dom"
+	"github.com/clyso/chorus/pkg/metrics"
 	"github.com/clyso/chorus/pkg/util"
 )
 
@@ -76,12 +77,14 @@ func (l *Local) TryAcquireN(ctx context.Context, n int64) (func(), error) {
 		return func() {}, nil
 	}
 	if n > l.c.Limit {
+		metrics.RateLimitError(l.name)
 		return nil, fmt.Errorf("%w: invalid ratelimit config: N (%d) is more than total limit (%d)", dom.ErrInvalidArg, n, l.c.Limit)
 	}
 
 	newUsage := atomic.AddInt64(&l.usage, n)
 	if newUsage > l.c.Limit {
 		_ = atomic.AddInt64(&l.usage, -n)
+		metrics.RateLimitRejected(l.name)
 		retryIn := util.DurationJitter(l.c.RetryMin, l.c.RetryMax)
 		logger.Info().
 			Int64("new_usage", newUsage).
@@ -92,11 +95,13 @@ func (l *Local) TryAcquireN(ctx context.Context, n int64) (func(), error) {
 	}
 
 	logger.Debug().Msg("local rate limit acquired")
+	metrics.RateLimitAcquired(l.name, n)
 
 	ctxAcq, release := context.WithCancel(ctx)
 	go func() {
 		<-ctxAcq.Done()
 		atomic.AddInt64(&l.usage, -n)
+		metrics.RateLimitReleased(l.name, n)
 		logger.Debug().Msg("local rate limit released")
 	}()
 	return release, nil
@@ -130,13 +135,21 @@ func (g *Global) TryAcquireN(ctx context.Context, n int64) (func(), error) {
 		return func() {}, nil
 	}
 	if n > g.c.Limit {
+		metrics.RateLimitError(g.name)
 		return nil, fmt.Errorf("%w: invalid ratelimit config: N (%d) is more than total limit (%d)", dom.ErrInvalidArg, n, g.c.Limit)
 	}
 
 	err := g.acquire(ctx, logger, n, acquireID)
 	if err != nil {
+		var rlErr *dom.ErrRateLimitExceeded
+		if errors.As(err, &rlErr) {
+			metrics.RateLimitRejected(g.name)
+		} else {
+			metrics.RateLimitError(g.name)
+		}
 		return nil, err
 	}
+	metrics.RateLimitAcquired(g.name, n)
 	acqCtx, release := context.WithCancel(ctx)
 	go func() {
 		timer := time.NewTimer(leaseInterval)
@@ -148,6 +161,7 @@ func (g *Global) TryAcquireN(ctx context.Context, n int64) (func(), error) {
 				if err != nil {
 					logger.Info().Err(err).Msg("unable to release global rate limit")
 				}
+				metrics.RateLimitReleased(g.name, n)
 				logger.Debug().Msg("global rate limit released")
 				return
 			case <-timer.C:

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/bsm/redislock"
@@ -25,6 +26,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/clyso/chorus/pkg/dom"
+	"github.com/clyso/chorus/pkg/metrics"
 	"github.com/clyso/chorus/pkg/util"
 )
 
@@ -40,16 +42,27 @@ type Lock struct {
 	overlap           time.Duration
 	releaseRetryDelay time.Duration
 	retryDone         chan struct{}
+	kind              string
+	releaseOnce       sync.Once
 }
 
-func NewLock(appCtx context.Context, logger *zerolog.Logger, lock *redislock.Lock, overlap time.Duration) *Lock {
+func NewLock(appCtx context.Context, logger *zerolog.Logger, lock *redislock.Lock, overlap time.Duration, kind string) *Lock {
 	return &Lock{
 		appCtx:            appCtx,
 		logger:            logger,
 		lock:              lock,
 		overlap:           overlap,
 		releaseRetryDelay: defaultReleaseRetryDelay,
+		kind:              kind,
 	}
+}
+
+// heldDec drops the held-lock gauge exactly once, no matter which
+// release path (immediate, retry success, or give-up) reaches it.
+func (r *Lock) heldDec() {
+	r.releaseOnce.Do(func() {
+		metrics.LockHeldDec(r.kind)
+	})
 }
 
 func (r *Lock) Refresh(ctx context.Context, duration time.Duration) error {
@@ -64,6 +77,7 @@ func (r *Lock) Release(ctx context.Context) {
 	releaseErr := r.lock.Release(context.Background())
 	if releaseErr == nil || errors.Is(releaseErr, redislock.ErrLockNotHeld) {
 		r.logger.Debug().Err(releaseErr).Msg("lock-service: lock released")
+		r.heldDec()
 		return
 	}
 	zerolog.Ctx(ctx).Warn().Err(releaseErr).Msg("lock-service: release failed, retrying in background")
@@ -77,14 +91,17 @@ func (r *Lock) retryRelease() {
 		select {
 		case <-r.appCtx.Done():
 			r.logger.Warn().Msg("lock-service: giving up lock release retry: context cancelled")
+			r.heldDec()
 			return
 		case <-time.After(r.releaseRetryDelay):
 		}
 		releaseErr := r.lock.Release(context.Background())
 		if releaseErr == nil || errors.Is(releaseErr, redislock.ErrLockNotHeld) {
 			r.logger.Info().Int("retry", attempt).Msg("lock-service: lock released after retry")
+			r.heldDec()
 			return
 		}
+		metrics.LockReleaseRetry(r.kind)
 		r.logger.Warn().Err(releaseErr).Int("attempt", attempt+1).Msg("lock-service: release retry failed")
 	}
 }
@@ -196,13 +213,20 @@ func (r *RedisIDKeyLocker[ID]) Lock(ctx context.Context, id ID, opts ...LockOpt)
 		opt = &redislock.Options{RetryStrategy: redislock.LimitRetry(redislock.ExponentialBackoff(time.Millisecond*50, time.Second*5), 100)}
 	}
 	logger.Debug().Msg("lock-service: obtaining lock")
+	start := time.Now()
 	lock, err := r.locker.Obtain(ctx, lockKey, lockOpts.duration, opt)
+	dur := time.Since(start).Seconds()
+	kind := r.keyPrefix
 	if errors.Is(err, redislock.ErrNotObtained) {
+		metrics.LockAcquire(kind, metrics.LockResultNotObtained, dur)
 		return nil, fmt.Errorf("%w: lock not obtained %q", &dom.ErrRateLimitExceeded{RetryIn: util.DurationJitter(time.Second, time.Second*5)}, lockKey)
 	}
 	if err != nil {
+		metrics.LockAcquire(kind, metrics.LockResultError, dur)
 		return nil, err
 	}
+	metrics.LockAcquire(kind, metrics.LockResultAcquired, dur)
+	metrics.LockHeldInc(kind)
 	logger.Debug().Msg("lock-service: lock obtained")
-	return NewLock(r.appCtx, &logger, lock, r.overlap), nil
+	return NewLock(r.appCtx, &logger, lock, r.overlap, kind), nil
 }
