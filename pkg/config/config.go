@@ -115,8 +115,11 @@ func Get(conf any, sources ...Src) error {
 		case pathOpt:
 			_, err = os.Stat(string(src))
 			if err != nil {
-				stdlog.Warn().Msgf("app config: no config file %q", string(src))
-				continue
+				if os.IsNotExist(err) {
+					stdlog.Warn().Msgf("app config: no config file %q", string(src))
+					continue
+				}
+				return fmt.Errorf("%w: unable to access config file %q", err, string(src))
 			}
 			v.SetConfigFile(string(src))
 			err = v.MergeInConfig()
