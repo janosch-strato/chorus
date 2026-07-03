@@ -18,6 +18,7 @@ package standalone
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -33,5 +34,9 @@ func serveFakeS3(ctx context.Context, port int) error {
 		<-ctx.Done()
 		_ = server.Shutdown(context.Background())
 	}()
-	return server.ListenAndServe()
+	err := server.ListenAndServe()
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
 }

@@ -19,6 +19,7 @@ package standalone
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -44,7 +45,13 @@ func serveUI(ctx context.Context, port int) (func() error, error) {
 		<-ctx.Done()
 		_ = server.Shutdown(context.Background())
 	}()
-	return server.ListenAndServe, nil
+	return func() error {
+		err := server.ListenAndServe()
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	}, nil
 }
 
 func handleSPA(w http.ResponseWriter, r *http.Request) {

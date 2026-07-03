@@ -102,6 +102,8 @@ func (s *server) Start(ctx context.Context) error {
 	err := g.Wait()
 	if IsServerError(err) {
 		zerolog.Ctx(ctx).Error().Err(err).Msg("unable to serve start")
+	} else {
+		err = nil
 	}
 	zerolog.Ctx(ctx).Info().Msg("server: done serving, waiting for cleanup done")
 	cleanWG.Wait()
