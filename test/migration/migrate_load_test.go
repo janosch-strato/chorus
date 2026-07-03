@@ -90,7 +90,8 @@ func TestApi_Migrate_Lock_test(t *testing.T) {
 	r := require.New(t)
 	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"})
 	objectLocker := store.NewObjectLocker(context.Background(), client, 0)
-	logger := log.GetLogger(&log.Config{Level: "info"}, "lock", "")
+	logger, err := log.GetLogger(&log.Config{Level: "info"}, "lock", "")
+	r.NoError(err)
 	ctx := logger.WithContext(context.TODO())
 
 	objectLockID := entity.NewVersionedObjectLockID("stor", "test", "obj", "")

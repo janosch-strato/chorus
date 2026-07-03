@@ -66,7 +66,10 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, flushRedis bool) 
 		}
 	}
 
-	logger := log.GetLogger(conf.Log, "", "")
+	logger, err := log.GetLogger(conf.Log, "", "")
+	if err != nil {
+		return err
+	}
 	if err := resolveAccessKeys(ctx, conf, logger); err != nil {
 		return err
 	}

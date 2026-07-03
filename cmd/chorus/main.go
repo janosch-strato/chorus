@@ -30,6 +30,7 @@ import (
 
 	"github.com/clyso/chorus/pkg/config"
 	"github.com/clyso/chorus/pkg/dom"
+	"github.com/clyso/chorus/pkg/log"
 	"github.com/clyso/chorus/service/standalone"
 )
 
@@ -62,7 +63,10 @@ Example 2: start chorus in standalone mode with custom config
 Example 3: start chorus, flushing Redis on startup
   chorus -flush-redis=true
 
-Example 4: print chorus config
+Example 4: start chorus with file logging enabled
+  chorus -log-file /var/log/chorus.log -log-file-level debug -log-file-json=true
+
+Example 5: print chorus config
   chorus print-config
   chorus -config ./my-config.yaml print-config 
 
@@ -77,11 +81,16 @@ Flags:
 func main() {
 	var h, help, printVer, v bool
 	var flushRedis bool
+	var logFilePath, logFileLevel string
+	var logFileJson bool
 	flag.BoolVar(&h, "h", false, "Print help. Example: chorus -h")
 	flag.BoolVar(&v, "v", false, "Verbose output. Example: chorus -v")
 	flag.BoolVar(&help, "help", false, "Print help. Example: chorus -help")
 	flag.BoolVar(&printVer, "version", false, "Print version. Example: chorus -version")
 	flag.BoolVar(&flushRedis, "flush-redis", false, "Flush configured Redis databases on startup before services start. Example: chorus -flush-redis=true")
+	flag.StringVar(&logFilePath, "log-file", "", "Path to a log file. If set, enables file logging in addition to stdout. Overrides config value. Example: chorus -log-file=/var/log/chorus.log")
+	flag.StringVar(&logFileLevel, "log-file-level", "", "Log level for the file logger, independent of stdout. Defaults to the configured file or stdout level. Overrides config value. Example: chorus -log-file-level=debug")
+	flag.BoolVar(&logFileJson, "log-file-json", false, "Use JSON format for the file logger, independent of stdout. Overrides config value. Example: chorus -log-file-json=true")
 	flag.Parse()
 	if h || help {
 		fmt.Print(helpText)
@@ -140,6 +149,23 @@ func main() {
 	if err != nil {
 		stdlog.Err(err).Msg("unable to read config")
 		os.Exit(1)
+	}
+
+	visitedFlags := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { visitedFlags[f.Name] = true })
+	if logFilePath != "" || logFileLevel != "" || visitedFlags["log-file-json"] {
+		if conf.Log.File == nil {
+			conf.Log.File = &log.FileConfig{}
+		}
+		if logFilePath != "" {
+			conf.Log.File.Path = logFilePath
+		}
+		if logFileLevel != "" {
+			conf.Log.File.Level = logFileLevel
+		}
+		if visitedFlags["log-file-json"] {
+			conf.Log.File.Json = logFileJson
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

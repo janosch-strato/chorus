@@ -1,6 +1,10 @@
 log:
   json: false # false for dev console logger, true - json log for prod to export to Grafana&Loki.
   level: info
+  # file: # optional additional file logging, disabled unless path is set
+  #   path: /var/log/chorus.log
+  #   level: info # defaults to log.level if unset
+  #   json: true
 metrics:
   enabled: false
   port: 9090

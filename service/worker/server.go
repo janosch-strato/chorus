@@ -64,7 +64,10 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 		return err
 	}
 	features.Set(conf.Features)
-	logger := log.GetLogger(conf.Log, app.App, app.AppID)
+	logger, err := log.GetLogger(conf.Log, app.App, app.AppID)
+	if err != nil {
+		return err
+	}
 	logger.Info().
 		Str("version", app.Version).
 		Str("commit", app.Commit).

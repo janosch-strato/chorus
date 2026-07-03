@@ -27,7 +27,9 @@ import (
 
 func UnaryInterceptor(cfg *Config, app, appID string) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (_ interface{}, err error) {
-		l := CreateLogger(cfg, app, appID)
+		// error ignored: file writer (if any) is already opened and cached by the
+		// GetLogger call at server startup, so this cannot fail in practice.
+		l, _ := CreateLogger(cfg, app, appID)
 		builder := l.With().Str(flow, string(xctx.Api)).Str(grpcMethod, info.FullMethod)
 		newLogger := builder.Logger()
 		ctx = newLogger.WithContext(ctx)
@@ -38,7 +40,9 @@ func UnaryInterceptor(cfg *Config, app, appID string) grpc.UnaryServerIntercepto
 
 func StreamInterceptor(cfg *Config, app, appID string) grpc.StreamServerInterceptor {
 	return func(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) (err error) {
-		l := CreateLogger(cfg, app, appID)
+		// error ignored: file writer (if any) is already opened and cached by the
+		// GetLogger call at server startup, so this cannot fail in practice.
+		l, _ := CreateLogger(cfg, app, appID)
 		builder := l.With().Str(flow, string(xctx.Api)).Str(grpcMethod, info.FullMethod)
 		newLogger := builder.Logger()
 		ctx := newLogger.WithContext(stream.Context())

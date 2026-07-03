@@ -33,7 +33,9 @@ func WorkerMiddleware(cfg *Config, app, appID string) asynq.MiddlewareFunc {
 		return asynq.HandlerFunc(func(ctx context.Context, t *asynq.Task) error {
 			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
-			l := CreateLogger(cfg, app, appID)
+			// error ignored: file writer (if any) is already opened and cached by the
+			// GetLogger call at server startup, so this cannot fail in practice.
+			l, _ := CreateLogger(cfg, app, appID)
 			builder := l.With()
 			builder = builder.Str("task_type", t.Type()).RawJSON("task_payload", t.Payload())
 			f := xctx.Migration

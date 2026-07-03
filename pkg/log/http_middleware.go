@@ -24,7 +24,9 @@ import (
 
 func HttpMiddleware(cfg *Config, app, appID string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		l := CreateLogger(cfg, app, appID)
+		// error ignored: file writer (if any) is already opened and cached by the
+		// GetLogger call at server startup, so this cannot fail in practice.
+		l, _ := CreateLogger(cfg, app, appID)
 		builder := l.With()
 		if zerolog.GlobalLevel() < zerolog.InfoLevel {
 			builder = builder.Str(httpMethod, r.Method).

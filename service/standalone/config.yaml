@@ -1,6 +1,10 @@
 log:
   level: warn
   json: false
+  # file: # optional additional file logging, disabled unless path is set
+  #   path: /var/log/chorus.log
+  #   level: info # defaults to log.level if unset
+  #   json: true
 concurrency: 10
 shutdownTimeout: 5s
 api:
