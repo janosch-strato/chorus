@@ -311,3 +311,41 @@ func Test_queueService_Stats(t *testing.T) {
 	r.Equal(info.FailedTotal-info.Archived, stats.Rescheduled, "expected stats rescheduled to equal failed total minus archived after archiving")
 	r.Equal(info.Archived, stats.Failed, "expected stats failed to match inspector info archived after archiving")
 }
+
+func Test_queueService_GetAndDeleteTask(t *testing.T) {
+	r := require.New(t)
+	ctx := t.Context()
+	c := testutil.SetupRedis(t)
+	inspector := asynq.NewInspectorFromRedisClient(c)
+	client := asynq.NewClientFromRedisClient(c)
+	t.Cleanup(func() {
+		client.Close()
+		inspector.Close()
+	})
+	qs := NewQueueService(inspector)
+
+	const queueName = "test-queue-get-task"
+	const taskID = "test-task-id"
+
+	// unknown queue and unknown task are both just "not there"
+	_, err := qs.GetTaskState(ctx, queueName, taskID)
+	r.ErrorIs(err, dom.ErrNotFound)
+	r.NoError(qs.DeleteTask(ctx, queueName, taskID))
+
+	_, err = client.EnqueueContext(ctx, asynq.NewTask("test-task", nil), asynq.Queue(queueName), asynq.TaskID(taskID))
+	r.NoError(err)
+
+	state, err := qs.GetTaskState(ctx, queueName, taskID)
+	r.NoError(err)
+	r.Equal(asynq.TaskStatePending, state)
+
+	_, err = qs.GetTaskState(ctx, queueName, "other-task-id")
+	r.ErrorIs(err, dom.ErrNotFound)
+
+	r.NoError(qs.DeleteTask(ctx, queueName, taskID))
+	_, err = qs.GetTaskState(ctx, queueName, taskID)
+	r.ErrorIs(err, dom.ErrNotFound)
+
+	// deleting twice is not an error
+	r.NoError(qs.DeleteTask(ctx, queueName, taskID))
+}
