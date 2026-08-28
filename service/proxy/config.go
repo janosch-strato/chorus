@@ -48,6 +48,11 @@ type Config struct {
 	Port    int               `yaml:"port"`
 	Address s3.ConfAddr       `yaml:"address"`
 	Cors    *cors.Config      `yaml:"cors"`
+
+	// ReadFromDestination serves object reads from the replication destination
+	// for objects the migration has already copied. Meant for migrations away
+	// from a storage that is too slow to read from.
+	ReadFromDestination bool `yaml:"readFromDestination"`
 }
 
 func (c *Config) Validate() error {

@@ -28,6 +28,7 @@ import (
 	"github.com/clyso/chorus/pkg/dom"
 	"github.com/clyso/chorus/pkg/entity"
 	"github.com/clyso/chorus/pkg/meta"
+	"github.com/clyso/chorus/pkg/metrics"
 	"github.com/clyso/chorus/pkg/s3"
 )
 
@@ -42,10 +43,29 @@ func (r *router) commonRead(req *http.Request) (resp *http.Response, storage str
 		}
 		return nil, "", false, err
 	}
-	storage, err = r.adjustObjReadRoute(ctx, storage, user, bucket)
+	storage, switchInProgress, err := r.adjustObjReadRoute(ctx, storage, user, bucket)
 	if err != nil {
 		return nil, "", false, err
 	}
+
+	// Objects already migrated may be read from the destination storage, which
+	// is the point of the readFromDestination option. Never while a switch is
+	// in progress: routing is handed over to the switch for the whole time it
+	// runs, not only once it moved the route.
+	if destStorage, destBucket, ok := r.destinationReadRoute(req, storage, user, bucket, switchInProgress); ok {
+		resp, isApiErr, err = r.readDestination(req, destStorage, destBucket)
+		if err == nil && !isApiErr {
+			return resp, destStorage, false, nil
+		}
+		zerolog.Ctx(ctx).Info().Err(err).Str("destination_storage", destStorage).
+			Msg("read from destination failed, falling back to source storage")
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		metrics.ProxyDestinationReadFallback(destStorage)
+		// resp, isApiErr and err are overwritten by the source read below
+	}
+
 	ctx = xctx.SetStorage(ctx, storage)
 	req = req.WithContext(ctx)
 
@@ -83,21 +103,22 @@ func (r *router) commonWrite(req *http.Request) (resp *http.Response, storage st
 	return
 }
 
-// adjustObjReadRoute adjust routing policy for read requests during switch process if old storage still has most recent obj version
-func (r *router) adjustObjReadRoute(ctx context.Context, prevStorage, user, bucket string) (string, error) {
+// adjustObjReadRoute adjust routing policy for read requests during switch process if old storage still has most recent obj version.
+// Reports whether a switch is in progress, which holds for the whole switch, not only when the route was moved.
+func (r *router) adjustObjReadRoute(ctx context.Context, prevStorage, user, bucket string) (string, bool, error) {
 	switchID := entity.NewReplicationSwitchInfoID(user, bucket)
 	_, err := r.policySvc.GetInProgressZeroDowntimeSwitchInfo(ctx, switchID)
 	if err != nil {
 		if errors.Is(err, dom.ErrNotFound) {
 			// no zero-downtime switch in progress
-			return prevStorage, nil
+			return prevStorage, false, nil
 		}
-		return "", err
+		return "", false, err
 	}
 	// since switch is in progress, we need to check if the object version is higher in other storage
 	objMeta, err := r.getVersion(ctx)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	prevStorageVer := objMeta[meta.Destination(prevStorage)]
 	maxVerStorage, maxVer := meta.Destination(prevStorage), prevStorageVer
@@ -110,7 +131,7 @@ func (r *router) adjustObjReadRoute(ctx context.Context, prevStorage, user, buck
 	if string(maxVerStorage) != prevStorage {
 		zerolog.Ctx(ctx).Info().Msgf("change read route during switch process: storage %s obj ver %d is higher than main storage %s %d", maxVerStorage, maxVer, prevStorage, prevStorageVer)
 	}
-	return string(maxVerStorage), nil
+	return string(maxVerStorage), true, nil
 }
 
 func (r *router) getVersion(ctx context.Context) (map[meta.Destination]int64, error) {

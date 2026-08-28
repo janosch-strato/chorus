@@ -44,14 +44,18 @@ func NewRouter(
 	versionSvc meta.VersionService,
 	policySvc policy.Service,
 	storageSvc storage.Service,
-	limit ratelimit.RPM) Router {
+	queueSvc tasks.QueueService,
+	limit ratelimit.RPM,
+	readFromDestination bool) Router {
 	return &router{
-		clients:    clients,
-		taskClient: taskClient,
-		versionSvc: versionSvc,
-		policySvc:  policySvc,
-		storageSvc: storageSvc,
-		limit:      limit,
+		clients:             clients,
+		taskClient:          taskClient,
+		versionSvc:          versionSvc,
+		policySvc:           policySvc,
+		storageSvc:          storageSvc,
+		queueSvc:            queueSvc,
+		limit:               limit,
+		readFromDestination: readFromDestination,
 	}
 }
 
@@ -61,7 +65,11 @@ type router struct {
 	versionSvc meta.VersionService
 	policySvc  policy.Service
 	storageSvc storage.Service
+	queueSvc   tasks.QueueService
 	limit      ratelimit.RPM
+	// readFromDestination serves reads of already migrated objects from the
+	// replication destination, see read_destination.go.
+	readFromDestination bool
 }
 
 func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks.SyncTask, storage string, isApiErr bool, err error) {
@@ -143,6 +151,22 @@ func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks
 		//todo: proxy unknown requests anyway???
 		err = dom.ErrNotImplemented
 	}
+	// A deleted object is gone from the source storage, but the migration
+	// destination keeps it until the deletion has been replicated, so it must
+	// no longer count as migrated.
+	if err == nil && !isApiErr {
+		switch method {
+		case s3.DeleteObject:
+			r.dropMigratedRecord(ctx, storage, object)
+		case s3.DeleteObjects:
+			for _, t := range taskList {
+				if payload, ok := t.(*tasks.ObjectSyncPayload); ok && payload.Deleted {
+					r.dropMigratedRecord(ctx, storage, payload.Object.Name)
+				}
+			}
+		}
+	}
+
 	if err == nil && task != nil {
 		task.SetFrom(storage)
 		if taskList == nil {

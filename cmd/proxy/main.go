@@ -39,6 +39,8 @@ var (
 	date               = "not set"
 	configPath         = flag.String("config", "config/config.yaml", "set path to config directory")
 	configOverridePath = flag.String("config-override", "config/override.yaml", "set path to config override directory")
+
+	readFromDestination = flag.Bool("read-from-destination", false, "serve reads of already migrated objects from the replication destination. Overrides readFromDestination config")
 )
 
 func main() {
@@ -63,6 +65,9 @@ func main() {
 	conf, err := proxy.GetConfig(configs...)
 	if err != nil {
 		stdlog.Fatal().Err(err).Msg("critical error. Unable to read app config")
+	}
+	if config.IsFlagPassed("read-from-destination") {
+		conf.ReadFromDestination = *readFromDestination
 	}
 
 	err = proxy.Start(ctx, dom.AppInfo{

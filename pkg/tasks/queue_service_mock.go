@@ -33,6 +33,20 @@ type QueueServiceMock struct {
 	// FailedTasks maps queue name to a list of TaskInfo returned by ListFailedTasks.
 	FailedTasks map[string][]*asynq.TaskInfo
 	ListErr     error
+
+	// Tasks maps queue name to the state of the individual tasks in it.
+	Tasks map[string]map[string]asynq.TaskState
+}
+
+// SetTaskState test helper to put a task with the given state into a queue
+func (q *QueueServiceMock) SetTaskState(queueName, taskID string, state asynq.TaskState) {
+	if q.Tasks == nil {
+		q.Tasks = make(map[string]map[string]asynq.TaskState)
+	}
+	if q.Tasks[queueName] == nil {
+		q.Tasks[queueName] = make(map[string]asynq.TaskState)
+	}
+	q.Tasks[queueName][taskID] = state
 }
 
 // InitReplicationInProgress test helper to initialize queues for replication in progress
@@ -79,6 +93,7 @@ func Reset(q *QueueServiceMock) {
 	q.Paused = make(map[string]bool)
 	q.FailedTasks = nil
 	q.ListErr = nil
+	q.Tasks = nil
 }
 
 func (q *QueueServiceMock) UnprocessedCount(ctx context.Context, ignoreNotfound bool, queueName ...string) (int, error) {
@@ -148,6 +163,19 @@ func (q *QueueServiceMock) Resume(ctx context.Context, queueName string) error {
 		return err
 	}
 	q.Paused[queueName] = false
+	return nil
+}
+
+func (q *QueueServiceMock) GetTaskState(_ context.Context, queueName, taskID string) (asynq.TaskState, error) {
+	state, ok := q.Tasks[queueName][taskID]
+	if !ok {
+		return 0, fmt.Errorf("%w: task %s in queue %s", dom.ErrNotFound, taskID, queueName)
+	}
+	return state, nil
+}
+
+func (q *QueueServiceMock) DeleteTask(_ context.Context, queueName, taskID string) error {
+	delete(q.Tasks[queueName], taskID)
 	return nil
 }
 

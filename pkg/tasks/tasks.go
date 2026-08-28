@@ -87,6 +87,32 @@ func replicationQueueName(queuePrefix Queue, id entity.ReplicationStatusID) stri
 	}
 }
 
+// MigrateObjCopyRetention is the period a finished object copy task is kept in
+// its queue. Retained tasks are the record of which objects the initial
+// migration has copied, which the proxy readFromDestination option consults to
+// decide whether a read may be served by the destination storage. The record
+// has to outlive the migration, so the same "long enough for everything" span
+// as the task timeout below is used. The retained tasks are freed when the
+// replication and its queues are deleted.
+const MigrateObjCopyRetention = 100 * 365 * 24 * time.Hour
+
+// MigrateObjCopyQueue returns the name of the queue holding the object copy
+// tasks of the given replication.
+func MigrateObjCopyQueue(id entity.ReplicationStatusID) string {
+	return replicationQueueName(QueueMigrateCopyObjectPrefix, id)
+}
+
+// MigrateObjCopyTaskID returns the task id of the object copy task for the
+// given object. The id is deterministic so that the task can be looked up
+// without knowing anything but the object itself.
+func MigrateObjCopyTaskID(fromStorage, toStorage, bucket, toBucket, object, versionID string) string {
+	id := fmt.Sprintf("mgr:co:%s:%s:%s:%s:%s", fromStorage, toStorage, bucket, toBucket, object)
+	if versionID != "" {
+		id += ":" + versionID
+	}
+	return id
+}
+
 func InitMigrationQueues(id entity.ReplicationStatusID) []string {
 	return []string{
 		replicationQueueName(QueueMigrateListObjectsPrefix, id),
@@ -330,12 +356,9 @@ func NewReplicationTask[T ReplicationTask](ctx context.Context, replicationID en
 		optionList = []asynq.Option{asynq.Queue(queue), asynq.TaskID(id)}
 		taskType = TypeMigrateBucketListObjects
 	case MigrateObjCopyPayload:
-		id := fmt.Sprintf("mgr:co:%s:%s:%s:%s:%s", p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket, p.Obj.Name)
-		if p.Obj.VersionID != "" {
-			id += ":" + p.Obj.VersionID
-		}
-		queue := replicationQueueName(QueueMigrateCopyObjectPrefix, replicationID)
-		optionList = []asynq.Option{asynq.Queue(queue), asynq.TaskID(id)}
+		id := MigrateObjCopyTaskID(p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket, p.Obj.Name, p.Obj.VersionID)
+		queue := MigrateObjCopyQueue(replicationID)
+		optionList = []asynq.Option{asynq.Queue(queue), asynq.TaskID(id), asynq.Retention(MigrateObjCopyRetention)}
 		taskType = TypeMigrateObjCopy
 	case MigrateVersionedObjectPayload:
 		id := fmt.Sprintf("mgr:cov:%s:%s:%s:%s", p.FromStorage, p.ToStorage, p.Bucket, p.Prefix)

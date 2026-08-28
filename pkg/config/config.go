@@ -18,6 +18,7 @@ package config
 
 import (
 	"embed"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -220,4 +221,17 @@ func (r readerOpt) apply(opts *options) {
 
 func Reader(reader io.Reader, name string) Src {
 	return readerOpt{reader, name}
+}
+
+// IsFlagPassed reports whether the named flag was given on the command line.
+// Boolean flags overriding a config value need this to tell "not given" from
+// an explicit "-flag=false".
+func IsFlagPassed(name string) bool {
+	passed := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			passed = true
+		}
+	})
+	return passed
 }

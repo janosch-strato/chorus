@@ -66,9 +66,12 @@ Example 3: start chorus, flushing Redis on startup
 Example 4: start chorus with file logging enabled
   chorus -log-file /var/log/chorus.log -log-file-level debug -log-file-json=true
 
-Example 5: print chorus config
+Example 5: start chorus serving reads of migrated objects from the destination
+  chorus -read-from-destination
+
+Example 6: print chorus config
   chorus print-config
-  chorus -config ./my-config.yaml print-config 
+  chorus -config ./my-config.yaml print-config
 
 Commands:
   print-config - prints config, can be used with -config flag
@@ -80,7 +83,7 @@ Flags:
 
 func main() {
 	var h, help, printVer, v bool
-	var flushRedis bool
+	var flushRedis, readFromDestination bool
 	var logFilePath, logFileLevel string
 	var logFileJson bool
 	flag.BoolVar(&h, "h", false, "Print help. Example: chorus -h")
@@ -91,6 +94,7 @@ func main() {
 	flag.StringVar(&logFilePath, "log-file", "", "Path to a log file. If set, enables file logging in addition to stdout. Overrides config value. Example: chorus -log-file=/var/log/chorus.log")
 	flag.StringVar(&logFileLevel, "log-file-level", "", "Log level for the file logger, independent of stdout. Defaults to the configured file or stdout level. Overrides config value. Example: chorus -log-file-level=debug")
 	flag.BoolVar(&logFileJson, "log-file-json", false, "Use JSON format for the file logger, independent of stdout. Overrides config value. Example: chorus -log-file-json=true")
+	flag.BoolVar(&readFromDestination, "read-from-destination", false, "Serve reads of already migrated objects from the replication destination. Overrides proxy readFromDestination config. Example: chorus -read-from-destination")
 	flag.Parse()
 	if h || help {
 		fmt.Print(helpText)
@@ -150,10 +154,12 @@ func main() {
 		stdlog.Err(err).Msg("unable to read config")
 		os.Exit(1)
 	}
+	if config.IsFlagPassed("read-from-destination") {
+		conf.Proxy.ReadFromDestination = readFromDestination
+	}
 
-	visitedFlags := map[string]bool{}
-	flag.Visit(func(f *flag.Flag) { visitedFlags[f.Name] = true })
-	if logFilePath != "" || logFileLevel != "" || visitedFlags["log-file-json"] {
+	logFileJsonSet := config.IsFlagPassed("log-file-json")
+	if logFilePath != "" || logFileLevel != "" || logFileJsonSet {
 		if conf.Log.File == nil {
 			conf.Log.File = &log.FileConfig{}
 		}
@@ -163,7 +169,7 @@ func main() {
 		if logFileLevel != "" {
 			conf.Log.File.Level = logFileLevel
 		}
-		if visitedFlags["log-file-json"] {
+		if logFileJsonSet {
 			conf.Log.File.Json = logFileJson
 		}
 	}

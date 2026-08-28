@@ -5,7 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hibiken/asynq"
 	"github.com/stretchr/testify/require"
+
+	"github.com/clyso/chorus/pkg/entity"
+	"github.com/clyso/chorus/pkg/testutil"
 )
 
 func Test_custom_bucket_compatibility(t *testing.T) {
@@ -66,4 +70,36 @@ func Test_custom_bucket_compatibility(t *testing.T) {
 		r.NoError(json.Unmarshal(srcJson, &dst))
 		r.Empty(dst.ToBucket, "no custom bucket unmarshal")
 	})
+}
+
+func Test_migrate_obj_copy_task_is_retained(t *testing.T) {
+	r := require.New(t)
+	ctx := t.Context()
+	c := testutil.SetupRedis(t)
+	client := asynq.NewClientFromRedisClient(c)
+	t.Cleanup(func() { client.Close() })
+
+	replicationID := entity.NewReplicationStatusID("user", "src", "buck", "dst", "dst-buck")
+	payload := MigrateObjCopyPayload{
+		Sync:   Sync{FromStorage: "src", ToStorage: "dst", ToBucket: "dst-buck"},
+		Bucket: "buck",
+		Obj:    ObjPayload{Name: "dir/obj"},
+	}
+	task, err := NewReplicationTask(ctx, replicationID, payload)
+	r.NoError(err)
+
+	info, err := client.EnqueueContext(ctx, task)
+	r.NoError(err)
+	// completed copy tasks are the record of the objects the migration copied,
+	// so they must outlive the migration
+	r.EqualValues(MigrateObjCopyRetention, info.Retention)
+	// the proxy looks the task up without seeing the task itself
+	r.EqualValues(MigrateObjCopyQueue(replicationID), info.Queue)
+	r.EqualValues(MigrateObjCopyTaskID("src", "dst", "buck", "dst-buck", "dir/obj", ""), info.ID)
+}
+
+func Test_MigrateObjCopyTaskID(t *testing.T) {
+	r := require.New(t)
+	r.EqualValues("mgr:co:src:dst:buck:dst-buck:obj", MigrateObjCopyTaskID("src", "dst", "buck", "dst-buck", "obj", ""))
+	r.EqualValues("mgr:co:src:dst:buck:dst-buck:obj:v1", MigrateObjCopyTaskID("src", "dst", "buck", "dst-buck", "obj", "v1"))
 }

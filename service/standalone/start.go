@@ -143,12 +143,13 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, flushRedis bool) 
 
 	if conf.Proxy.Enabled {
 		proxyConf := proxy.Config{
-			Common:  conf.Common,
-			Auth:    conf.Proxy.Auth,
-			Port:    conf.Proxy.Port,
-			Address: conf.Proxy.Address,
-			Storage: conf.Storage,
-			Cors:    conf.Proxy.Cors,
+			Common:              conf.Common,
+			Auth:                conf.Proxy.Auth,
+			Port:                conf.Proxy.Port,
+			Address:             conf.Proxy.Address,
+			Storage:             conf.Storage,
+			Cors:                conf.Proxy.Cors,
+			ReadFromDestination: conf.Proxy.ReadFromDestination,
 		}
 		if len(proxyConf.Redis.Addresses) == 0 {
 			proxyConf.Redis.Addresses = s3.NewConfAddrs(redisAddrs...)

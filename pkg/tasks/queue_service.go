@@ -34,6 +34,13 @@ type QueueService interface {
 	Delete(ctx context.Context, queueName string, force bool) error
 	Stats(ctx context.Context, queueName string) (*QueueStats, error)
 	ListFailedTasks(ctx context.Context, queueName string) ([]*asynq.TaskInfo, error)
+	// GetTaskState returns the state of a single task.
+	// Errors:
+	//   dom.ErrNotFound - if the queue or the task does not exist.
+	GetTaskState(ctx context.Context, queueName, taskID string) (asynq.TaskState, error)
+	// DeleteTask removes a task from the queue. Deleting a task that is not
+	// there is not an error.
+	DeleteTask(ctx context.Context, queueName, taskID string) error
 }
 
 type QueueStats struct {
@@ -161,6 +168,28 @@ func (q *queueService) Resume(ctx context.Context, queueName string) error {
 		}
 	}
 	return err
+}
+
+func (q *queueService) GetTaskState(_ context.Context, queueName, taskID string) (asynq.TaskState, error) {
+	info, err := q.inspector.GetTaskInfo(queueName, taskID)
+	if err != nil {
+		if errors.Is(err, asynq.ErrQueueNotFound) || errors.Is(err, asynq.ErrTaskNotFound) {
+			return 0, fmt.Errorf("%w: task %s in queue %s", dom.ErrNotFound, taskID, queueName)
+		}
+		return 0, fmt.Errorf("get task %s in queue %s: %w", taskID, queueName, err)
+	}
+	return info.State, nil
+}
+
+func (q *queueService) DeleteTask(_ context.Context, queueName, taskID string) error {
+	err := q.inspector.DeleteTask(queueName, taskID)
+	if err != nil {
+		if errors.Is(err, asynq.ErrQueueNotFound) || errors.Is(err, asynq.ErrTaskNotFound) {
+			return nil
+		}
+		return fmt.Errorf("delete task %s in queue %s: %w", taskID, queueName, err)
+	}
+	return nil
 }
 
 func (q *queueService) ListFailedTasks(_ context.Context, queueName string) ([]*asynq.TaskInfo, error) {
