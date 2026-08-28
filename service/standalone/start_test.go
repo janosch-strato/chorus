@@ -30,6 +30,8 @@ import (
 	pb "github.com/clyso/chorus/proto/gen/go/chorus"
 )
 
+const dialTimeout = 10 * time.Second
+
 func TestStandaloneDefaultConfig(t *testing.T) {
 	r := require.New(t)
 	conf, err := GetConfig()
@@ -46,7 +48,13 @@ func TestStandaloneDefaultConfig(t *testing.T) {
 		done = true
 	}()
 
-	grpcConn, err := grpc.DialContext(ctx, fmt.Sprintf("localhost:%d", conf.Api.GrpcPort),
+	// Start() runs in a goroutine and its error is not observable here, so the
+	// blocking dial needs a deadline of its own to not wait forever when the
+	// app failed to come up.
+	dialCtx, dialCancel := context.WithTimeout(ctx, dialTimeout)
+	defer dialCancel()
+
+	grpcConn, err := grpc.DialContext(dialCtx, fmt.Sprintf("localhost:%d", conf.Api.GrpcPort),
 		grpc.WithInsecure(),
 		grpc.WithBackoffMaxDelay(time.Second),
 		grpc.WithBlock(),
