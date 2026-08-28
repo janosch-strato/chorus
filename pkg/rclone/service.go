@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"sync"
 
@@ -101,7 +102,7 @@ func New(conf *s3.StorageConfig, jsonLog bool, concurrency int, metricsSvc metri
 		return nil, err
 	}
 
-	s := svc{s3: s3, _configs: make(map[string]*configmap.Map, len(conf.Storages)), metricsSvc: metricsSvc, memCalc: mamCalc, memLimiter: memLimiter, fileLimiter: fileLimiter}
+	s := svc{s3: s3, _configs: make(map[string]configmap.Simple, len(conf.Storages)), metricsSvc: metricsSvc, memCalc: mamCalc, memLimiter: memLimiter, fileLimiter: fileLimiter}
 
 	for storName, stor := range conf.Storages {
 		for user, cred := range stor.Credentials {
@@ -120,8 +121,7 @@ func New(conf *s3.StorageConfig, jsonLog bool, concurrency int, metricsSvc metri
 				vStr := fmt.Sprint(v)
 				scm.Set(k, vStr)
 			}
-			cm := fs.ConfigMap(s3.Prefix, s3.Options, name, scm)
-			s._configs[name] = cm
+			s._configs[name] = scm
 		}
 	}
 
@@ -160,7 +160,7 @@ func mapLogLvl() fs.LogLevel {
 
 type svc struct {
 	s3         *fs.RegInfo
-	_configs   map[string]*configmap.Map
+	_configs   map[string]configmap.Simple
 	metricsSvc metrics.S3Service
 
 	memCalc     *MemCalculator
@@ -177,15 +177,23 @@ type svc struct {
 
 type fsCacheKey struct {
 	storage, bucket, user string
+	headObject            bool
 }
 
-func (s *svc) getConf(storage, user string) (*configmap.Map, error) {
+// getConf returns the rclone config of a storage. With headObject set, the
+// config lets rclone read object metadata with a HEAD request, which its
+// server side copy needs to learn the size of the copied object.
+func (s *svc) getConf(storage, user string, headObject bool) (*configmap.Map, error) {
 	name := storage + ":" + user
 	res, ok := s._configs[name]
 	if !ok {
 		return nil, fmt.Errorf("%w: config for storage %q, user %q not found", dom.ErrInvalidStorageConfig, storage, user)
 	}
-	return res, nil
+	if headObject {
+		res = maps.Clone(res)
+		res.Set("no_head_object", "false")
+	}
+	return fs.ConfigMap(s.s3.Prefix, s.s3.Options, name, res), nil
 }
 
 func (s *svc) Compare(ctx context.Context, listMatch bool, from, to, fromBucket string, toBucket string) (*CompareRes, error) {
@@ -193,11 +201,11 @@ func (s *svc) Compare(ctx context.Context, listMatch bool, from, to, fromBucket 
 	span.SetAttributes(attribute.String("bucket", fromBucket), attribute.String("from", from), attribute.String("to", to))
 	defer span.End()
 
-	src, err := s.getFS(ctx, from, fromBucket)
+	src, err := s.getFS(ctx, from, fromBucket, false)
 	if err != nil {
 		return nil, err
 	}
-	dest, err := s.getFS(ctx, to, toBucket)
+	dest, err := s.getFS(ctx, to, toBucket, false)
 	if err != nil {
 		return nil, err
 	}
@@ -291,11 +299,17 @@ func (s *svc) CopyTo(ctx context.Context, from, to File, size int64) (err error)
 		}
 	}()
 
-	src, err := s.getFS(ctx, from.Storage, from.Bucket)
+	src, err := s.getFS(ctx, from.Storage, from.Bucket, false)
 	if err != nil {
 		return err
 	}
-	dest, err := s.getFS(ctx, to.Storage, to.Bucket)
+	/*
+	 * Copying within one storage is done server side by rclone, which
+	 * returns the copied object without its size unless the destination
+	 * reads object metadata, so rclone rejects its own copy as corrupted.
+	 * Removing this workaround requires a fix in the rclone s3 backend.
+	 */
+	dest, err := s.getFS(ctx, to.Storage, to.Bucket, from.Storage == to.Storage)
 	if err != nil {
 		return err
 	}
@@ -318,13 +332,13 @@ func (s *svc) CopyTo(ctx context.Context, from, to File, size int64) (err error)
 	return
 }
 
-func (s *svc) getFS(ctx context.Context, storage, bucket string) (fs.Fs, error) {
+func (s *svc) getFS(ctx context.Context, storage, bucket string, headObject bool) (fs.Fs, error) {
 	user := xctx.GetUser(ctx)
-	key := fsCacheKey{storage: storage, bucket: bucket, user: user}
+	key := fsCacheKey{storage: storage, bucket: bucket, user: user, headObject: headObject}
 	if cached, ok := s.fsCache.Load(key); ok {
 		return cached.(fs.Fs), nil
 	}
-	storageConf, err := s.getConf(storage, user)
+	storageConf, err := s.getConf(storage, user, headObject)
 	if err != nil {
 		return nil, err
 	}
