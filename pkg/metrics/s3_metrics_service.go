@@ -17,11 +17,22 @@
 package metrics
 
 import (
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	xctx "github.com/clyso/chorus/pkg/ctx"
 	"github.com/clyso/chorus/pkg/s3"
+)
+
+var requestDuration = promauto.NewHistogramVec(
+	prometheus.HistogramOpts{
+		Name:    "storage_request_duration_seconds",
+		Help:    "Duration of api calls to s3 storage.",
+		Buckets: storageLatencyBuckets,
+	},
+	[]string{"flow", "storage", "method"},
 )
 
 var countRequests = promauto.NewCounterVec(
@@ -71,6 +82,8 @@ var rcloneFilesNum = promauto.NewGauge(
 
 type S3Service interface {
 	Count(flow xctx.Flow, storage string, method s3.Method)
+	// Duration records how long a storage took to answer an api call.
+	Duration(flow xctx.Flow, storage string, method s3.Method, d time.Duration)
 	Upload(flow xctx.Flow, storage, bucket string, bytes int)
 	Download(flow xctx.Flow, storage, bucket string, bytes int)
 
@@ -140,6 +153,13 @@ func (s svcS3) Count(flow xctx.Flow, storage string, method s3.Method) {
 		"flow":    string(flow),
 		"storage": storage,
 		"method":  method.String()}).Inc()
+}
+
+func (s svcS3) Duration(flow xctx.Flow, storage string, method s3.Method, d time.Duration) {
+	if !s.enabled {
+		return
+	}
+	requestDuration.WithLabelValues(string(flow), storage, method.String()).Observe(d.Seconds())
 }
 
 func (s svcS3) Upload(flow xctx.Flow, storage, bucket string, bytes int) {

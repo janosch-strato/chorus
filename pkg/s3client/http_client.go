@@ -184,6 +184,7 @@ func (c *client) S3() *S3 {
 }
 
 func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err error) {
+	start := time.Now()
 	ctx, span := otel.Tracer("").Start(req.Context(), fmt.Sprintf("clientDo.%s", xctx.GetMethod(req.Context()).String()))
 	span.SetAttributes(attribute.String("storage", c.name), attribute.String("user", c.user))
 	if xctx.GetBucket(ctx) != "" {
@@ -206,6 +207,7 @@ func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err 
 		method := xctx.GetMethod(req.Context())
 		flow := xctx.GetFlow(req.Context())
 		c.metricsSvc.Count(flow, c.name, method)
+		c.metricsSvc.Duration(flow, c.name, method, time.Since(start))
 		switch method {
 		case s3.GetObject:
 			if resp.ContentLength != 0 {
