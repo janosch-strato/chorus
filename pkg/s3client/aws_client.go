@@ -33,7 +33,7 @@ import (
 	"github.com/clyso/chorus/pkg/s3"
 )
 
-func newAWSClient(conf s3.Storage, name, user string, metricsSvc metrics.S3Service) (*AWS, error) {
+func newAWSClient(conf s3.Storage, name, user string, metricsSvc metrics.S3Service, transport *http.Transport) (*AWS, error) {
 
 	cred := credentials.NewCredentials(&credentials.StaticProvider{Value: credentials.Value{
 		AccessKeyID:     conf.Credentials[user].AccessKeyID,
@@ -44,7 +44,12 @@ func newAWSClient(conf s3.Storage, name, user string, metricsSvc metrics.S3Servi
 	awsConfig := aws.NewConfig().
 		WithMaxRetries(0).
 		WithCredentials(cred).
-		WithHTTPClient(&http.Client{Timeout: conf.HttpTimeout}).
+		WithHTTPClient(&http.Client{
+			Timeout: conf.HttpTimeout,
+			// see newClient: the default transport pools 2 connections per
+			// host, and the acl sync of every copied object runs through here
+			Transport: measuredTransport{next: transport, storage: name},
+		}).
 		WithS3ForcePathStyle(true).
 		WithDisableSSL(!conf.IsSecure).
 		WithEndpoint(endpoint).

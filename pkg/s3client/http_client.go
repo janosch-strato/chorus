@@ -42,8 +42,8 @@ import (
 	"github.com/clyso/chorus/pkg/s3"
 )
 
-// Connection-pool sizing for the S3 transport used by minio-go.
-// The minio-go default caps idle connections per host at ~16, which
+// Connection-pool sizing for the S3 transport, which all clients of a storage
+// share. The minio-go default caps idle connections per host at ~16, which
 // forces fresh TCP+TLS handshakes once tasks-in-flight to one storage
 // exceeds that. Sized to comfortably cover worker.concurrency in the
 // low hundreds against a single source/destination host.
@@ -71,7 +71,8 @@ func (t measuredTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 // newS3Transport mirrors http.DefaultTransport apart from the idle
-// connection pool, which is sized for high-concurrency workers.
+// connection pool, which is sized for high-concurrency workers. One is made
+// per storage, see New().
 func newS3Transport() *http.Transport {
 	return &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
@@ -88,10 +89,17 @@ func newS3Transport() *http.Transport {
 	}
 }
 
-func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsSvc metrics.S3Service, _ trace.TracerProvider) (Client, error) {
+func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsSvc metrics.S3Service, _ trace.TracerProvider, transport *http.Transport) (Client, error) {
 	c := &client{
+		// Without a transport this would use http.DefaultTransport, which
+		// keeps 2 idle connections per host, so every request beyond two in
+		// flight pays a fresh tcp and tls handshake. It is also shared
+		// process wide, which lets an InsecureSkipVerify set for one purpose
+		// reach every other user of the default transport. This one is
+		// measured by client.Do itself, which knows the s3 method.
 		c: &http.Client{
-			Timeout: conf.HttpTimeout,
+			Timeout:   conf.HttpTimeout,
+			Transport: transport,
 		},
 		online:     &atomic.Bool{},
 		conf:       conf,
@@ -104,7 +112,7 @@ func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsS
 	mc, err := mclient.New(conf.Address.Value(), &mclient.Options{
 		Creds:     credentials.NewStaticV4(c.cred.AccessKeyID, c.cred.SecretAccessKey, ""),
 		Secure:    conf.IsSecure,
-		Transport: measuredTransport{next: newS3Transport(), storage: name},
+		Transport: measuredTransport{next: transport, storage: name},
 	})
 	if err != nil {
 		return nil, err
@@ -133,7 +141,7 @@ func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsS
 		}
 	}(conf.HealthCheckInterval)
 
-	awsClient, err := newAWSClient(conf, name, user, metricsSvc)
+	awsClient, err := newAWSClient(conf, name, user, metricsSvc, transport)
 	if err != nil {
 		return nil, err
 	}

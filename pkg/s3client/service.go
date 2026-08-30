@@ -55,8 +55,13 @@ func New(ctx context.Context, conf *s3.StorageConfig, metricsSvc metrics.S3Servi
 
 	for storage, val := range conf.Storages {
 		clientConf := val
+		// One connection pool per storage: its clients differ in the sdk they
+		// speak and in the user they sign for, but they all talk to the same
+		// endpoint, and a pool per client would let one storage see a
+		// multiple of the connections the pool is sized for.
+		transport := newS3Transport()
 		for user := range clientConf.Credentials {
-			c, err := newClient(ctx, clientConf, storage, user, metricsSvc, tp)
+			c, err := newClient(ctx, clientConf, storage, user, metricsSvc, tp, transport)
 			if err != nil {
 				return nil, fmt.Errorf("unable to create client for storage %q: %w", storage, err)
 			}
