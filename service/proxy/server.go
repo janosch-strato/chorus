@@ -87,6 +87,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 		return fmt.Errorf("%w: unable to instrument tracing app redis", err)
 	}
 	redis.SetLogger(log.NewStdLogger())
+	appRedis.AddHook(util.TimingHook{})
 	logger.Info().Msg("app redis connected")
 
 	verSvc := meta.NewVersionService(appRedis)
@@ -99,6 +100,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	if err != nil {
 		return fmt.Errorf("%w: unable to instrument tracing app redis", err)
 	}
+	confRedis.AddHook(util.TimingHook{})
 	queueRedis := util.NewRedisAsynq(conf.Redis, conf.Redis.QueueDB)
 	taskClient := asynq.NewClient(queueRedis)
 	defer taskClient.Close()

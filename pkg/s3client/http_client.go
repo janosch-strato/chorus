@@ -52,6 +52,24 @@ const (
 	s3MaxIdleConnsPerHost = 256
 )
 
+// measuredTransport records how long a storage takes to answer the requests
+// the s3 sdk clients make. Those do not go through client.Do, so without this
+// the acl, tag and stat calls of the worker are invisible.
+type measuredTransport struct {
+	next    http.RoundTripper
+	storage string
+}
+
+func (t measuredTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	inFlight := metrics.StorageInFlight(t.storage, req.Method)
+	inFlight.Inc()
+	start := time.Now()
+	resp, err := t.next.RoundTrip(req)
+	inFlight.Dec()
+	metrics.StorageHTTPDuration(t.storage, req.Method, time.Since(start))
+	return resp, err
+}
+
 // newS3Transport mirrors http.DefaultTransport apart from the idle
 // connection pool, which is sized for high-concurrency workers.
 func newS3Transport() *http.Transport {
@@ -86,7 +104,7 @@ func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsS
 	mc, err := mclient.New(conf.Address.Value(), &mclient.Options{
 		Creds:     credentials.NewStaticV4(c.cred.AccessKeyID, c.cred.SecretAccessKey, ""),
 		Secure:    conf.IsSecure,
-		Transport: newS3Transport(),
+		Transport: measuredTransport{next: newS3Transport(), storage: name},
 	})
 	if err != nil {
 		return nil, err
@@ -274,9 +292,24 @@ func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err 
 		signReqSpan.End()
 	}
 
+	// Report connection level timings into the request timing collector, if
+	// the caller collects them. The outgoing request keeps a background
+	// context on purpose: attaching the client context would make a client
+	// disconnect cancel the storage request, which it does not today.
+	timing := xctx.GetTiming(ctx)
+	if timing != nil {
+		newReq = newReq.WithContext(xctx.TraceContext(context.Background(), timing))
+	}
+
+	inFlight := metrics.StorageInFlight(c.name, xctx.GetMethod(ctx).String())
+	inFlight.Inc()
 	_, doReqSpan := otel.Tracer("").Start(ctx, fmt.Sprintf("clientDo.%s.DoReq", xctx.GetMethod(req.Context()).String()))
 	resp, err = c.c.Do(newReq)
 	doReqSpan.End()
+	inFlight.Dec()
+	if resp != nil {
+		timing.SetRequestID(resp.Header.Get("x-amz-request-id"))
+	}
 	if resp != nil && !successStatus[resp.StatusCode] {
 		isApiErr = true
 		// Read the body to be saved later.

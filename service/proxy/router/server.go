@@ -36,6 +36,7 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, span := otel.Tracer("").Start(r.Context(), "Route")
 		defer span.End()
+		ctx, timing := xctx.WithTiming(ctx)
 		r = r.WithContext(ctx)
 		logger := zerolog.Ctx(r.Context())
 		logger.Info().Msg("proxy: new request received")
@@ -45,7 +46,7 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 		routeDuration := time.Since(start)
 		metrics.ProxyRequestDuration(xctx.GetMethod(ctx).String(), storage, routeDuration)
 		if err != nil {
-			logger.Info().Err(err).
+			timingFields(logger.Info().Err(err), timing).
 				Str(log.Storage, storage).
 				Dur("route_duration", routeDuration).
 				Msg("proxy: request failed")
@@ -57,6 +58,7 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 				_ = resp.Body.Close()
 			}
 		}()
+		var replDuration time.Duration
 		ctx = log.WithStorage(ctx, storage)
 		// TODO: is it reachable? This branch is active only if err == nil
 		if isApiErr {
@@ -65,12 +67,14 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 		} else {
 			replCtx, cancel := log.StartNew(ctx)
 			defer cancel()
+			replStart := time.Now()
 			for _, task := range taskList {
 				replErr := replSvc.Replicate(replCtx, task)
 				if replErr != nil {
 					logger.Err(replErr).Msg("unable to handle replication")
 				}
 			}
+			replDuration = time.Since(replStart)
 		}
 		// Forward response to original client
 		for k, v := range resp.Header {
@@ -86,12 +90,40 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 		// route_duration is the time until the storage answered, duration also
 		// covers streaming the body to the client. Logged per request so that
 		// storage latency can be followed over time without a metrics backend.
-		logger.Info().
+		timingFields(logger.Info(), timing).
 			Str(log.Storage, storage).
 			Dur("route_duration", routeDuration).
 			Dur("duration", time.Since(start)).
 			Int("status", resp.StatusCode).
 			Int64("bytes", written).
+			Dur("repl_duration", replDuration).
 			Msg("proxy: request done")
 	})
+}
+
+// timingFields adds where the time of a request went: redis, name resolution,
+// connecting and the wait for the storage. conn_reused tells a storage that is
+// slow to answer from one we cannot get a connection to.
+func timingFields(e *zerolog.Event, t *xctx.Timing) *zerolog.Event {
+	redisDuration, redisCalls := t.Redis()
+	dns, connect, tlsHandshake, ttfb := t.Network()
+	conns, reused := t.Connection()
+	e = e.Dur("redis_duration", redisDuration).Int64("redis_calls", redisCalls).
+		Int64("conns", conns).Int64("conns_reused", reused)
+	if dns != 0 {
+		e = e.Dur("dns_duration", dns)
+	}
+	if connect != 0 {
+		e = e.Dur("connect_duration", connect)
+	}
+	if tlsHandshake != 0 {
+		e = e.Dur("tls_duration", tlsHandshake)
+	}
+	if ttfb != 0 {
+		e = e.Dur("ttfb", ttfb)
+	}
+	if id := t.RequestID(); id != "" {
+		e = e.Str("storage_request_id", id)
+	}
+	return e
 }
