@@ -47,6 +47,28 @@ var migrationCopyPhaseDuration = promauto.NewHistogramVec(prometheus.HistogramOp
 	Buckets: storageLatencyBuckets,
 }, []string{"phase", "from", "to"})
 
+var storageInFlight = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	Name: "storage_requests_in_flight",
+	Help: "Number of api calls currently waiting for an s3 storage to answer.",
+}, []string{"storage", "method"})
+
+// StorageInFlight returns the in flight gauge of a storage and method. Keeping
+// the gauge instead of looking it up twice avoids a label lookup per request.
+func StorageInFlight(storage, method string) prometheus.Gauge {
+	return storageInFlight.WithLabelValues(storage, method)
+}
+
+var storageHTTPDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+	Name:    "storage_http_duration_seconds",
+	Help:    "Duration of the http requests the s3 sdk clients make, by storage and http method. Covers the calls that do not go through the proxy, such as acl and tag sync.",
+	Buckets: storageLatencyBuckets,
+}, []string{"storage", "method"})
+
+// StorageHTTPDuration records one sdk request to a storage.
+func StorageHTTPDuration(storage, method string, d time.Duration) {
+	storageHTTPDuration.WithLabelValues(storage, method).Observe(d.Seconds())
+}
+
 // ProxyRequestDuration records how long a proxied request took as the client
 // saw it. An empty storage name means the request never reached a storage.
 func ProxyRequestDuration(method, storage string, d time.Duration) {

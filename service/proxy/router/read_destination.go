@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/rs/zerolog"
@@ -170,7 +171,10 @@ func (r *router) objectMigrated(ctx context.Context, source, user, bucket, objec
 	}
 
 	queue, taskID := migrationCopyTask(source, user, bucket, object, dest)
+	// asynq brings its own redis client, which the timing hook does not see
+	queueStart := time.Now()
 	state, err := r.queueSvc.GetTaskState(ctx, queue, taskID)
+	xctx.GetTiming(ctx).AddRedis(time.Since(queueStart))
 	if err != nil {
 		if errors.Is(err, dom.ErrNotFound) {
 			// not copied yet, or the record is gone

@@ -19,6 +19,7 @@ package router
 import (
 	"io"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -36,16 +37,22 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, span := otel.Tracer("").Start(r.Context(), "Route")
 		defer span.End()
+		ctx, timing := xctx.WithTiming(ctx)
 		r = r.WithContext(ctx)
 		logger := zerolog.Ctx(r.Context())
 		logger.Info().Msg("proxy: new request received")
 
 		start := time.Now()
+		// so that a client slow to send or to receive does not make the proxy
+		// look slow
+		body := newClientRequestBody(r.Body)
+		r.Body = body
+
 		resp, taskList, storage, isApiErr, err := router.Route(r)
 		routeDuration := time.Since(start)
-		metrics.ProxyRequestDuration(xctx.GetMethod(ctx).String(), storage, routeDuration)
 		if err != nil {
-			logger.Info().Err(err).
+			metrics.ProxyRequestInternalDuration(xctx.GetMethod(ctx).String(), storage, body.internalDuration())
+			timingFields(logger.Info().Err(err), timing).
 				Str(log.Storage, storage).
 				Dur("route_duration", routeDuration).
 				Msg("proxy: request failed")
@@ -57,6 +64,7 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 				_ = resp.Body.Close()
 			}
 		}()
+		var enqueueDuration time.Duration
 		ctx = log.WithStorage(ctx, storage)
 		// TODO: is it reachable? This branch is active only if err == nil
 		if isApiErr {
@@ -65,17 +73,21 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 		} else {
 			replCtx, cancel := log.StartNew(ctx)
 			defer cancel()
+			enqueueStart := time.Now()
 			for _, task := range taskList {
 				replErr := replSvc.Replicate(replCtx, task)
 				if replErr != nil {
 					logger.Err(replErr).Msg("unable to handle replication")
 				}
 			}
+			enqueueDuration = time.Since(enqueueStart)
 		}
 		// Forward response to original client
 		for k, v := range resp.Header {
 			w.Header().Set(k, v[0])
 		}
+		internalDuration := body.internalDuration()
+		metrics.ProxyRequestInternalDuration(xctx.GetMethod(ctx).String(), storage, internalDuration)
 		w.WriteHeader(resp.StatusCode)
 		written, err := io.Copy(w, resp.Body)
 		if err != nil {
@@ -83,15 +95,74 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		// route_duration is the time until the storage answered, duration also
-		// covers streaming the body to the client. Logged per request so that
-		// storage latency can be followed over time without a metrics backend.
-		logger.Info().
+		// repl_enqueue_duration is the proxy side of a replication: recording
+		// the new version and queueing the task. The replication itself
+		// happens later, in a worker, which measures it there. Logged per
+		// request so that latency can be followed without a metrics backend.
+		duration := time.Since(start)
+		metrics.ProxyRequestDuration(xctx.GetMethod(ctx).String(), storage, duration)
+		timingFields(logger.Info(), timing).
 			Str(log.Storage, storage).
 			Dur("route_duration", routeDuration).
-			Dur("duration", time.Since(start)).
+			Dur("internal_duration", internalDuration).
+			Dur("duration", duration).
 			Int("status", resp.StatusCode).
 			Int64("bytes", written).
+			Dur("repl_enqueue_duration", enqueueDuration).
 			Msg("proxy: request done")
 	})
+}
+
+// clientRequestBody notes when the request was last read from. An upload is
+// read by the transport forwarding it, on a goroutine of its own, hence the
+// atomic.
+type clientRequestBody struct {
+	io.ReadCloser
+	lastRead atomic.Int64
+}
+
+// newClientRequestBody starts the note at arrival, which is where a request
+// that nobody reads a body from was fully read.
+func newClientRequestBody(body io.ReadCloser) *clientRequestBody {
+	b := &clientRequestBody{ReadCloser: body}
+	b.lastRead.Store(time.Now().UnixNano())
+	return b
+}
+
+func (b *clientRequestBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.lastRead.Store(time.Now().UnixNano())
+	return n, err
+}
+
+// internalDuration is the time since the request was fully read.
+func (b *clientRequestBody) internalDuration() time.Duration {
+	return time.Since(time.Unix(0, b.lastRead.Load()))
+}
+
+// timingFields adds where the time of a request went: redis, name resolution,
+// connecting and the wait for the storage. conn_reused tells a storage that is
+// slow to answer from one we cannot get a connection to.
+func timingFields(e *zerolog.Event, t *xctx.Timing) *zerolog.Event {
+	redisDuration, redisCalls := t.Redis()
+	dns, connect, tlsHandshake, ttfb := t.Network()
+	conns, reused := t.Connection()
+	e = e.Dur("redis_duration", redisDuration).Int64("redis_calls", redisCalls).
+		Int64("conns", conns).Int64("conns_reused", reused)
+	if dns != 0 {
+		e = e.Dur("dns_duration", dns)
+	}
+	if connect != 0 {
+		e = e.Dur("connect_duration", connect)
+	}
+	if tlsHandshake != 0 {
+		e = e.Dur("tls_duration", tlsHandshake)
+	}
+	if ttfb != 0 {
+		e = e.Dur("ttfb", ttfb)
+	}
+	if id := t.RequestID(); id != "" {
+		e = e.Str("storage_request_id", id)
+	}
+	return e
 }
