@@ -90,8 +90,14 @@ func newS3Transport() *http.Transport {
 
 func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsSvc metrics.S3Service, _ trace.TracerProvider) (Client, error) {
 	c := &client{
+		// Without a transport this would use http.DefaultTransport, which
+		// keeps 2 idle connections per host, so every request beyond two in
+		// flight pays a fresh tcp and tls handshake. It is also shared
+		// process wide, which lets an InsecureSkipVerify set for one purpose
+		// reach every other user of the default transport.
 		c: &http.Client{
-			Timeout: conf.HttpTimeout,
+			Timeout:   conf.HttpTimeout,
+			Transport: newS3Transport(),
 		},
 		online:     &atomic.Bool{},
 		conf:       conf,
