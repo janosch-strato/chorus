@@ -30,6 +30,7 @@ import (
 	"github.com/clyso/chorus/pkg/entity"
 	"github.com/clyso/chorus/pkg/log"
 	"github.com/clyso/chorus/pkg/meta"
+	"github.com/clyso/chorus/pkg/metrics"
 	"github.com/clyso/chorus/pkg/rclone"
 	"github.com/clyso/chorus/pkg/tasks"
 )
@@ -80,6 +81,7 @@ func (s *svc) HandleMigrationObjCopy(ctx context.Context, t *asynq.Task) (err er
 		toBucket = p.ToBucket
 	}
 	// 1. sync obj meta and content
+	copyStart := time.Now()
 	err = lock.Do(ctx, time.Second*2, func() error {
 		return s.rc.CopyTo(ctx, rclone.File{
 			Storage: p.FromStorage,
@@ -91,6 +93,8 @@ func (s *svc) HandleMigrationObjCopy(ctx context.Context, t *asynq.Task) (err er
 			Name:    p.Obj.Name,
 		}, p.Obj.Size)
 	})
+	copyDuration := time.Since(copyStart)
+	metrics.MigrationCopyPhase("copy", p.FromStorage, p.ToStorage, copyDuration)
 	if err != nil {
 		if errors.Is(err, dom.ErrNotFound) {
 			logger.Info().Msg("migration obj copy: skip object sync: object missing in source")
@@ -105,13 +109,19 @@ func (s *svc) HandleMigrationObjCopy(ctx context.Context, t *asynq.Task) (err er
 	}
 
 	// 2. sync obj ACL
+	aclStart := time.Now()
 	err = s.syncObjectACL(ctx, fromClient, toClient, p.Bucket, p.Obj.Name, p.ToBucket)
+	aclDuration := time.Since(aclStart)
+	metrics.MigrationCopyPhase("acl", p.FromStorage, p.ToStorage, aclDuration)
 	if err != nil {
 		return err
 	}
 
 	// 3. sync obj tags
+	tagsStart := time.Now()
 	err = s.syncObjectTagging(ctx, fromClient, toClient, p.Bucket, p.Obj.Name, p.ToBucket)
+	tagsDuration := time.Since(tagsStart)
+	metrics.MigrationCopyPhase("tags", p.FromStorage, p.ToStorage, tagsDuration)
 	if err != nil {
 		return err
 	}
@@ -122,7 +132,12 @@ func (s *svc) HandleMigrationObjCopy(ctx context.Context, t *asynq.Task) (err er
 			return fmt.Errorf("migration obj copy: unable to update obj meta: %w", err)
 		}
 	}
-	logger.Info().Msg("migration obj copy: done")
+	logger.Info().
+		Dur("copy_duration", copyDuration).
+		Dur("acl_duration", aclDuration).
+		Dur("tags_duration", tagsDuration).
+		Int64("obj_size", p.Obj.Size).
+		Msg("migration obj copy: done")
 
 	return nil
 }

@@ -57,23 +57,15 @@ func ProxyMiddleware(next http.Handler) http.Handler {
 		[]string{"status"},
 	)
 
-	var httpDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name:    "proxy_response_time_seconds",
-		Help:    "Duration of chorus s3 proxy requests.",
-		Buckets: prometheus.DefBuckets,
-	}, []string{"method"})
-
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method := xctx.GetMethod(r.Context())
 
-		timer := prometheus.NewTimer(httpDuration.WithLabelValues(method.String()))
 		rw := NewResponseWriter(w)
 		next.ServeHTTP(rw, r)
 		statusCode := rw.statusCode
 
 		responseStatus.WithLabelValues(strconv.Itoa(statusCode)).Inc()
 		totalRequests.WithLabelValues(method.String()).Inc()
-		timer.ObserveDuration()
 	})
 }
 

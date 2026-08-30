@@ -19,11 +19,14 @@ package router
 import (
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel"
 
+	xctx "github.com/clyso/chorus/pkg/ctx"
 	"github.com/clyso/chorus/pkg/log"
+	"github.com/clyso/chorus/pkg/metrics"
 	"github.com/clyso/chorus/pkg/replication"
 	"github.com/clyso/chorus/pkg/util"
 )
@@ -37,7 +40,9 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 		logger := zerolog.Ctx(r.Context())
 		logger.Info().Msg("proxy: new request received")
 
+		start := time.Now()
 		resp, taskList, storage, isApiErr, err := router.Route(r)
+		metrics.ProxyRequestDuration(xctx.GetMethod(ctx).String(), storage, time.Since(start))
 		if err != nil {
 			util.WriteError(r.Context(), w, err)
 			return
