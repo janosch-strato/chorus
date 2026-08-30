@@ -60,7 +60,9 @@ func (s *svc) HandleMigrationObjCopy(ctx context.Context, t *asynq.Task) (err er
 	}
 
 	objectLockID := entity.NewVersionedObjectLockID(p.ToStorage, p.ToBucket, p.Obj.Name, p.Obj.VersionID)
+	lockStart := time.Now()
 	lock, err := s.objectLocker.Lock(ctx, objectLockID)
+	lockDuration := time.Since(lockStart)
 	if err != nil {
 		return err
 	}
@@ -133,6 +135,7 @@ func (s *svc) HandleMigrationObjCopy(ctx context.Context, t *asynq.Task) (err er
 		}
 	}
 	logger.Info().
+		Dur("lock_duration", lockDuration).
 		Dur("copy_duration", copyDuration).
 		Dur("acl_duration", aclDuration).
 		Dur("tags_duration", tagsDuration).
