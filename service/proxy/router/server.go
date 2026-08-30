@@ -42,8 +42,13 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 
 		start := time.Now()
 		resp, taskList, storage, isApiErr, err := router.Route(r)
-		metrics.ProxyRequestDuration(xctx.GetMethod(ctx).String(), storage, time.Since(start))
+		routeDuration := time.Since(start)
+		metrics.ProxyRequestDuration(xctx.GetMethod(ctx).String(), storage, routeDuration)
 		if err != nil {
+			logger.Info().Err(err).
+				Str(log.Storage, storage).
+				Dur("route_duration", routeDuration).
+				Msg("proxy: request failed")
 			util.WriteError(r.Context(), w, err)
 			return
 		}
@@ -72,11 +77,21 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 			w.Header().Set(k, v[0])
 		}
 		w.WriteHeader(resp.StatusCode)
-		_, err = io.Copy(w, resp.Body)
+		written, err := io.Copy(w, resp.Body)
 		if err != nil {
 			logger.Err(err).Msg("unable to copy response body")
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+		// route_duration is the time until the storage answered, duration also
+		// covers streaming the body to the client. Logged per request so that
+		// storage latency can be followed over time without a metrics backend.
+		logger.Info().
+			Str(log.Storage, storage).
+			Dur("route_duration", routeDuration).
+			Dur("duration", time.Since(start)).
+			Int("status", resp.StatusCode).
+			Int64("bytes", written).
+			Msg("proxy: request done")
 	})
 }
