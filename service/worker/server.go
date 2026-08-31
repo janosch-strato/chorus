@@ -161,7 +161,12 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	versionedMigrationSvc := handler.NewVersionedMigrationSvc(policySvc, copySvc, objectVersionInfoStore, objectLocker, conf.Worker.PauseRetryInterval)
 	versionedMigrationCtrl := handler.NewVersionedMigrationCtrl(versionedMigrationSvc, taskClient)
 
-	workerSvc := handler.New(conf.Worker, s3Clients, versionSvc, policySvc, storageSvc, rc, taskClient, limiter, objectLocker, bucketLocker, replicationStatusLocker)
+	if err = tasks.SetListingSpeed(conf.Worker.ListingSpeed); err != nil {
+		return err
+	}
+	logger.Info().Str("listing_speed", tasks.GetListingSpeed()).Msg("bucket listing speed")
+
+	workerSvc := handler.New(conf.Worker, s3Clients, versionSvc, policySvc, storageSvc, rc, taskClient, queueSvc, limiter, objectLocker, bucketLocker, replicationStatusLocker)
 
 	stdLogger := log.NewStdLogger()
 	redis.SetLogger(stdLogger)

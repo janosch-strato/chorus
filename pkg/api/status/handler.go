@@ -193,6 +193,11 @@ func Handler(conf Config, logger zerolog.Logger, cSrv pb.ChorusServer, pSvc poli
 		srv.HandleFunc(failedTasksPattern, func(w http.ResponseWriter, r *http.Request) {
 			handleMaintFailedTasks(logger, qSvc, pSvc, r.PathValue("bucket"), w, r)
 		})
+		listingSpeedPattern := fmt.Sprintf("/%s/listing-speed", maintPrefix)
+		logger.Info().Str("listingSpeedPath", listingSpeedPattern).Msg("setting up listing speed api")
+		srv.HandleFunc(listingSpeedPattern, func(w http.ResponseWriter, r *http.Request) {
+			handleListingSpeed(logger, w, r)
+		})
 		srv.HandleFunc(migStatusPattern, func(w http.ResponseWriter, r *http.Request) {
 			handleMaintMigStatus(logger, cSrv, pSvc, checkInterval, r.PathValue("bucket"),
 				lockRcloneBucket, unlockRcloneBucket, lockChorusBucket, unlockChorusBucket, w, r)
@@ -590,5 +595,43 @@ func handleMaintMigStatus(logger zerolog.Logger, cSrv pb.ChorusServer, pSvc poli
 				return
 			}
 		}
+	}
+}
+
+type listingSpeedResponse struct {
+	Speed string `json:"listing_speed"`
+	Error string `json:"error,omitempty"`
+}
+
+// handleListingSpeed reports the bucket listing speed of this instance, and
+// changes it on PUT. The change lasts until the next restart, which applies
+// the configured speed again.
+func handleListingSpeed(logger zerolog.Logger, w http.ResponseWriter, r *http.Request) {
+	write := func(code int, rsp listingSpeedResponse) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		if err := json.NewEncoder(w).Encode(rsp); err != nil {
+			logger.Error().Err(err).Msg("failed to encode listing speed response")
+		}
+	}
+	switch r.Method {
+	case http.MethodGet:
+		write(http.StatusOK, listingSpeedResponse{Speed: tasks.GetListingSpeed()})
+	case http.MethodPut, http.MethodPost:
+		speed := strings.TrimSpace(r.URL.Query().Get("speed"))
+		if err := tasks.SetListingSpeed(speed); err != nil || speed == "" {
+			write(http.StatusBadRequest, listingSpeedResponse{
+				Speed: tasks.GetListingSpeed(),
+				Error: fmt.Sprintf("speed query parameter must be %s or %s", tasks.ListingFull, tasks.ListingAuto),
+			})
+			return
+		}
+		logger.Info().Str("listing_speed", speed).Msg("bucket listing speed changed")
+		write(http.StatusOK, listingSpeedResponse{Speed: tasks.GetListingSpeed()})
+	default:
+		write(http.StatusMethodNotAllowed, listingSpeedResponse{
+			Speed: tasks.GetListingSpeed(),
+			Error: "use GET to read and PUT to change the listing speed",
+		})
 	}
 }

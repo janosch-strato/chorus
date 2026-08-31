@@ -30,9 +30,14 @@ import (
 	"github.com/clyso/chorus/pkg/s3client"
 	"github.com/clyso/chorus/pkg/storage"
 	"github.com/clyso/chorus/pkg/store"
+	"github.com/clyso/chorus/pkg/tasks"
 )
 
 type Config struct {
+	// ListingSpeed is "full" (default) or "auto", see tasks.ListingSpeed. It is
+	// applied at startup and can be changed at runtime through the maint api,
+	// which lasts until the next restart.
+	ListingSpeed        string        `yaml:"listingSpeed"`
 	PauseRetryInterval  time.Duration `yaml:"pauseRetryInterval"`
 	SwitchRetryInterval time.Duration `yaml:"switchRetryInterval"`
 	QueueUpdateInterval time.Duration `yaml:"queueUpdateInterval"`
@@ -45,6 +50,7 @@ type svc struct {
 	storageSvc              storage.Service
 	rc                      rclone.Service
 	taskClient              *asynq.Client
+	queueSvc                tasks.QueueService
 	limit                   ratelimit.RPM
 	objectLocker            *store.ObjectLocker
 	bucketLocker            *store.BucketLocker
@@ -56,10 +62,12 @@ type svc struct {
 
 func New(conf *Config, clients s3client.Service, versionSvc meta.VersionService,
 	policySvc policy.Service, storageSvc storage.Service, rc rclone.Service,
-	taskClient *asynq.Client, limit ratelimit.RPM, objectLocker *store.ObjectLocker,
-	bucketLocker *store.BucketLocker, replicationstatusLocker *store.ReplicationStatusLocker) *svc {
+	taskClient *asynq.Client, queueSvc tasks.QueueService, limit ratelimit.RPM,
+	objectLocker *store.ObjectLocker, bucketLocker *store.BucketLocker,
+	replicationstatusLocker *store.ReplicationStatusLocker) *svc {
 	return &svc{
 		conf:                    conf,
+		queueSvc:                queueSvc,
 		clients:                 clients,
 		versionSvc:              versionSvc,
 		policySvc:               policySvc,

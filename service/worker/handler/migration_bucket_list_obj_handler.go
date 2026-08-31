@@ -21,7 +21,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"strings"
+	"time"
 
 	"github.com/hibiken/asynq"
 	mclient "github.com/minio/minio-go/v7"
@@ -34,6 +36,24 @@ import (
 
 	"github.com/clyso/chorus/pkg/log"
 	"github.com/clyso/chorus/pkg/tasks"
+)
+
+const (
+	// At listing speed auto the listing stops while this many copy tasks are
+	// queued, and continues listingRecheckDelay later. A fixed depth throttles
+	// the listing to the speed of the copies by itself: it only ever refills
+	// what the copies took out.
+	//
+	// Both together bound the copy rate the listing can keep up with, at
+	// listingQueueLimit / listingRecheckDelay, here 2000 objects per second,
+	// which is an order of magnitude above what a migration has reached so
+	// far. Buying that headroom with a deeper queue rather than with a shorter
+	// delay keeps the polling of a parked listing rare: the queued tasks cost
+	// about 1.6 KB of redis each, so the depth is worth little more than the
+	// memory it holds.
+	listingQueueLimit   = 20000
+	listingCheckEvery   = 1000
+	listingRecheckDelay = 10 * time.Second
 )
 
 func (s *svc) HandleMigrationBucketListObj(ctx context.Context, t *asynq.Task) error {
@@ -68,9 +88,24 @@ func (s *svc) HandleMigrationBucketListObj(ctx context.Context, t *asynq.Task) e
 		return err
 	}
 
+	copyQueue := tasks.MigrateObjCopyQueue(replicationID)
 	objects := fromClient.S3().ListObjects(ctx, p.Bucket, mclient.ListObjectsOptions{StartAfter: lastObjName, Prefix: p.Prefix})
 	objectsNum := 0
+	listed := 0
 	for object := range objects {
+		// Give the copies room to catch up instead of queueing millions of
+		// objects they cannot get to for days. The count covers retried tasks
+		// too, so a listing also stops when the copies are failing. The
+		// listing resumes from the stored cursor, so it can stop anywhere.
+		listed++
+		if listed%listingCheckEvery == 0 && tasks.GetListingSpeed() == tasks.ListingAuto {
+			queued, err := s.queueSvc.UnprocessedCount(ctx, true, copyQueue)
+			if err != nil {
+				logger.Err(err).Msg("migration bucket list obj: unable to check the copy queue")
+			} else if queued >= listingQueueLimit {
+				return s.rescheduleListing(ctx, replicationID, p, queued, logger)
+			}
+		}
 		if object.Err != nil {
 			return fmt.Errorf("migration bucket list obj: list objects error %w", object.Err)
 		}
@@ -171,5 +206,35 @@ func (s *svc) HandleMigrationBucketListObj(ctx context.Context, t *asynq.Task) e
 	}
 
 	logger.Info().Msg("migration bucket list obj: done")
+	return nil
+}
+
+// rescheduleListing stops the current listing task and queues its continuation
+// after listingRecheckDelay. The listing resumes from the cursor stored per
+// object, so the only state needed is the task itself. The task id carries the
+// cursor: the id of the running task is still taken, and a continuation from
+// the same position stays deduplicated.
+func (s *svc) rescheduleListing(ctx context.Context, replicationID entity.ReplicationStatusID,
+	p tasks.MigrateBucketListObjectsPayload, queued int, logger *zerolog.Logger,
+) error {
+	cursor, err := s.storageSvc.GetLastListedObj(ctx, p)
+	if err != nil {
+		return fmt.Errorf("migration bucket list obj: unable to get listing cursor: %w", err)
+	}
+	id := fmt.Sprintf("%s:%08x", tasks.MigrateBucketListObjectsTaskID(p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket, p.Prefix),
+		crc32.ChecksumIEEE([]byte(cursor)))
+	task, err := tasks.NewReplicationTask(ctx, replicationID, p, asynq.TaskID(id), asynq.ProcessIn(listingRecheckDelay))
+	if err != nil {
+		return fmt.Errorf("migration bucket list obj: unable to create continuation task: %w", err)
+	}
+	logger.Info().Int("queued", queued).Str("cursor", cursor).
+		Msg("migration bucket list obj: copy queue is full, pausing the listing")
+	if _, err = s.taskClient.EnqueueContext(ctx, task); err != nil {
+		if errors.Is(err, asynq.ErrDuplicateTask) || errors.Is(err, asynq.ErrTaskIDConflict) {
+			// a continuation from this position is already queued
+			return nil
+		}
+		return fmt.Errorf("migration bucket list obj: unable to enqueue continuation task: %w", err)
+	}
 	return nil
 }
