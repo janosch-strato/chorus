@@ -1,6 +1,10 @@
 concurrency: 10 # max number of task that can be processed in parallel
 shutdownTimeout: 5s
 worker:
+  # full: list a bucket as fast as the source storage answers.
+  # auto: keep the listing just ahead of the object copies. Pausing a listing
+  # entirely is not one of these: pause its migr_list_obj queue instead.
+  listingSpeed: full
   queueUpdateInterval: 5s
   pauseRetryInterval: 30s
   switchRetryInterval: 30s

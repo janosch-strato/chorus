@@ -96,6 +96,16 @@ func replicationQueueName(queuePrefix Queue, id entity.ReplicationStatusID) stri
 // replication and its queues are deleted.
 const MigrateObjCopyRetention = 100 * 365 * 24 * time.Hour
 
+// MigrateBucketListObjectsTaskID returns the task id of the listing task for a
+// bucket and prefix.
+func MigrateBucketListObjectsTaskID(fromStorage, toStorage, bucket, toBucket, prefix string) string {
+	id := fmt.Sprintf("mgr:lo:%s:%s:%s:%s", fromStorage, toStorage, bucket, toBucket)
+	if prefix != "" {
+		id += ":" + prefix
+	}
+	return id
+}
+
 // MigrateObjCopyQueue returns the name of the queue holding the object copy
 // tasks of the given replication.
 func MigrateObjCopyQueue(id entity.ReplicationStatusID) string {
@@ -304,7 +314,10 @@ type ReplicationTask interface {
 		MigrateVersionedObjectPayload
 }
 
-func NewReplicationTask[T ReplicationTask](ctx context.Context, replicationID entity.ReplicationStatusID, payload T) (*asynq.Task, error) {
+// NewReplicationTask builds the task for a replication payload. Extra options
+// are applied last, so a caller can override the defaults, for example to
+// reschedule a listing under a different task id.
+func NewReplicationTask[T ReplicationTask](ctx context.Context, replicationID entity.ReplicationStatusID, payload T, extra ...asynq.Option) (*asynq.Task, error) {
 	bytes, err := json.Marshal(&payload)
 	if err != nil {
 		return nil, err
@@ -348,10 +361,7 @@ func NewReplicationTask[T ReplicationTask](ctx context.Context, replicationID en
 		optionList = []asynq.Option{asynq.Queue(queue)}
 		taskType = TypeObjectSyncACL
 	case MigrateBucketListObjectsPayload:
-		id := fmt.Sprintf("mgr:lo:%s:%s:%s:%s", p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket)
-		if p.Prefix != "" {
-			id += ":" + p.Prefix
-		}
+		id := MigrateBucketListObjectsTaskID(p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket, p.Prefix)
 		queue := replicationQueueName(QueueMigrateListObjectsPrefix, replicationID)
 		optionList = []asynq.Option{asynq.Queue(queue), asynq.TaskID(id)}
 		taskType = TypeMigrateBucketListObjects
@@ -380,6 +390,7 @@ func NewReplicationTask[T ReplicationTask](ctx context.Context, replicationID en
 	// Since golangs time.Duration has no value for infinity, we just set  a timeout of 100 years here,
 	// which is most likely long enough for most tasks.
 	optionList = append(optionList, asynq.Timeout(100*24*365*time.Hour), asynq.MaxRetry(math.MaxInt32))
+	optionList = append(optionList, extra...)
 	return asynq.NewTask(taskType, bytes, optionList...), nil
 }
 
