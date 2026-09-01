@@ -21,6 +21,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -37,6 +39,9 @@ import (
 	"github.com/clyso/chorus/service/proxy"
 	"github.com/clyso/chorus/service/worker"
 )
+
+// redisProbeName prefixes the connection name of the startup checks.
+const redisProbeName = "chorus-startup-"
 
 func Start(ctx context.Context, app dom.AppInfo, conf *Config, flushRedis bool) error {
 	// detect fake s3 storages in config
@@ -86,6 +91,19 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, flushRedis bool) 
 
 	// start embedded redis only when no external redis is configured:
 	redisAddrs := conf.Redis.GetAddresses()
+	if flushRedis && len(redisAddrs) != 0 {
+		// A flush wipes whole databases, so every other user of one of them
+		// loses its state. Asking redis who is connected to them catches an
+		// instance that shares the redis server under its own db numbers,
+		// which nothing we keep in our own databases can see.
+		used, usedErr := redisDBsInUse(ctx, conf)
+		if usedErr != nil {
+			return usedErr
+		}
+		if len(used) != 0 {
+			return fmt.Errorf("%w: refusing to flush redis, db %v in use by another instance", dom.ErrInvalidArg, used)
+		}
+	}
 	var redisSvc *miniredis.Miniredis
 	if len(redisAddrs) == 0 {
 		var miniErr error
@@ -248,15 +266,25 @@ func storageList(fake map[string]int, conf *s3.StorageConfig) *zerolog.Array {
 	return arr
 }
 
-func flushRedisDBs(ctx context.Context, conf *Config) error {
+// getRedisDBs returns the databases this instance uses, without duplicates.
+func getRedisDBs(conf *Config) []int {
 	seen := map[int]struct{}{}
 	dbs := []int{conf.Redis.MetaDB, conf.Redis.QueueDB, conf.Redis.LockDB, conf.Redis.ConfigDB}
-	flushed := make([]int, 0, len(dbs))
+	dedup := make([]int, 0, len(dbs))
 	for _, db := range dbs {
 		if _, ok := seen[db]; ok {
 			continue
 		}
 		seen[db] = struct{}{}
+		dedup = append(dedup, db)
+	}
+	return dedup
+}
+
+func flushRedisDBs(ctx context.Context, conf *Config) error {
+	dbs := getRedisDBs(conf)
+	flushed := make([]int, 0, len(dbs))
+	for _, db := range dbs {
 		client := util.NewRedis(conf.Redis, db)
 		// FLUSHDB ASYNC lets Redis reclaim the keyspace in a background thread and
 		// acks immediately, so a large synchronous flush cannot exceed the client
@@ -290,4 +318,44 @@ func getRandomPort() (string, int, error) {
 		return "", 0, err
 	}
 	return addr, port, nil
+}
+
+// redisDBsInUse returns those of the databases we would flush that another
+// client is connected to. Own connections are recognised by their name.
+func redisDBsInUse(ctx context.Context, conf *Config) ([]int, error) {
+	name := fmt.Sprintf("%s%d", redisProbeName, os.Getpid())
+	client := util.NewRedisNamed(conf.Redis, conf.Redis.QueueDB, name)
+	defer client.Close()
+	list, err := client.ClientList(ctx).Result()
+	if err != nil {
+		return nil, fmt.Errorf("unable to list redis clients: %w", err)
+	}
+
+	ours := map[int]struct{}{}
+	for _, db := range getRedisDBs(conf) {
+		ours[db] = struct{}{}
+	}
+	seen := map[int]struct{}{}
+	used := make([]int, 0, len(ours))
+	for _, line := range strings.Split(list, "\n") {
+		db, isOurs := -1, false
+		for _, field := range strings.Fields(line) {
+			switch key, value, _ := strings.Cut(field, "="); key {
+			case "db":
+				db, _ = strconv.Atoi(value)
+			case "name":
+				isOurs = value == name
+			}
+		}
+		if _, ok := ours[db]; !ok || isOurs {
+			continue
+		}
+		if _, ok := seen[db]; ok {
+			continue
+		}
+		seen[db] = struct{}{}
+		used = append(used, db)
+	}
+	sort.Ints(used)
+	return used, nil
 }
