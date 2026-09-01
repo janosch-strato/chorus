@@ -43,6 +43,7 @@ import (
 
 	xctx "github.com/clyso/chorus/pkg/ctx"
 	"github.com/clyso/chorus/pkg/metrics"
+	"github.com/clyso/chorus/pkg/switches"
 )
 
 // storageCache is reported as the storage of a request that no storage saw.
@@ -73,6 +74,19 @@ func headBucketKey(user, bucket string) string {
 	return user + ":" + bucket
 }
 
+// enabled reports whether answers may be replayed. Turning the cache off
+// forgets what it holds: an operator who turns it off wants the storage asked
+// again, not a memory that outlives the switch.
+func (c *headBucketCache) enabled() bool {
+	if switches.HeadBucketCache() {
+		return true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	clear(c.answers)
+	return false
+}
+
 // get returns the headers of a remembered check, or nil if there is none.
 func (c *headBucketCache) get(user, bucket string) http.Header {
 	c.mu.RLock()
@@ -97,7 +111,7 @@ func (c *headBucketCache) put(user, bucket string, header http.Header) {
 // headBucket answers a bucket existence check from the cache if it holds one,
 // and remembers the answer of the storage otherwise.
 func (r *router) headBucket(req *http.Request) (resp *http.Response, storage string, isApiErr bool, err error) {
-	if !r.readFromDestination || r.headCache == nil {
+	if !r.readFromDestination || r.headCache == nil || !r.headCache.enabled() {
 		return r.commonRead(req)
 	}
 	ctx := req.Context()

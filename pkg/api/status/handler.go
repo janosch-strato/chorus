@@ -199,6 +199,11 @@ func Handler(conf Config, logger zerolog.Logger, cSrv pb.ChorusServer, pSvc poli
 		srv.HandleFunc(listingSpeedPattern, func(w http.ResponseWriter, r *http.Request) {
 			handleListingSpeed(logger, w, r)
 		})
+		headBucketCachePattern := fmt.Sprintf("/%s/head-bucket-cache", maintPrefix)
+		logger.Info().Str("headBucketCachePath", headBucketCachePattern).Msg("setting up head bucket cache api")
+		srv.HandleFunc(headBucketCachePattern, func(w http.ResponseWriter, r *http.Request) {
+			handleHeadBucketCache(logger, w, r)
+		})
 		srv.HandleFunc(migStatusPattern, func(w http.ResponseWriter, r *http.Request) {
 			handleMaintMigStatus(logger, cSrv, pSvc, checkInterval, r.PathValue("bucket"),
 				lockRcloneBucket, unlockRcloneBucket, lockChorusBucket, unlockChorusBucket, w, r)
@@ -602,6 +607,45 @@ func handleMaintMigStatus(logger zerolog.Logger, cSrv pb.ChorusServer, pSvc poli
 type listingSpeedResponse struct {
 	Speed string `json:"listing_speed"`
 	Error string `json:"error,omitempty"`
+}
+
+type headBucketCacheResponse struct {
+	Enabled bool   `json:"head_bucket_cache"`
+	Error   string `json:"error,omitempty"`
+}
+
+// handleHeadBucketCache reports whether this instance answers bucket existence
+// checks from memory, and turns that on or off on PUT. Turning it off forgets
+// what is remembered. The change lasts until the next restart.
+func handleHeadBucketCache(logger zerolog.Logger, w http.ResponseWriter, r *http.Request) {
+	write := func(code int, rsp headBucketCacheResponse) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		if err := json.NewEncoder(w).Encode(rsp); err != nil {
+			logger.Error().Err(err).Msg("failed to encode head bucket cache response")
+		}
+	}
+	switch r.Method {
+	case http.MethodGet:
+		write(http.StatusOK, headBucketCacheResponse{Enabled: switches.HeadBucketCache()})
+	case http.MethodPut, http.MethodPost:
+		enabled, err := strconv.ParseBool(strings.TrimSpace(r.URL.Query().Get("enabled")))
+		if err != nil {
+			write(http.StatusBadRequest, headBucketCacheResponse{
+				Enabled: switches.HeadBucketCache(),
+				Error:   "enabled query parameter must be true or false",
+			})
+			return
+		}
+		switches.SetHeadBucketCache(enabled)
+		logger.Info().Bool("head_bucket_cache", enabled).Msg("head bucket cache switched")
+		write(http.StatusOK, headBucketCacheResponse{Enabled: switches.HeadBucketCache()})
+	default:
+		write(http.StatusMethodNotAllowed, headBucketCacheResponse{
+			Enabled: switches.HeadBucketCache(),
+			Error:   "use GET to read and PUT to change the head bucket cache",
+		})
+	}
 }
 
 // handleListingSpeed reports the bucket listing speed of this instance, and

@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/clyso/chorus/pkg/s3"
+	"github.com/clyso/chorus/pkg/switches"
 )
 
 func Test_headBucketCache(t *testing.T) {
@@ -52,6 +53,17 @@ func Test_headBucketCache(t *testing.T) {
 		cache.put(testUser, testBucket, answer)
 
 		r.Nil(cache.get("other-user", testBucket))
+	})
+
+	t.Run("switched off it answers nothing and forgets what it holds", func(t *testing.T) {
+		r := require.New(t)
+		cache := newHeadBucketCache()
+		cache.put(testUser, testBucket, answer)
+		switches.SetHeadBucketCache(false)
+		t.Cleanup(func() { switches.SetHeadBucketCache(true) })
+
+		r.False(cache.enabled())
+		r.Nil(cache.get(testUser, testBucket), "the entry is gone, not just unused")
 	})
 
 	t.Run("a remembered bucket is answered without a storage", func(t *testing.T) {
