@@ -30,6 +30,7 @@ import (
 
 	"github.com/clyso/chorus/pkg/config"
 	"github.com/clyso/chorus/pkg/dom"
+	"github.com/clyso/chorus/pkg/listen"
 	"github.com/clyso/chorus/pkg/log"
 	"github.com/clyso/chorus/service/standalone"
 )
@@ -182,6 +183,9 @@ func main() {
 		zerolog.Ctx(ctx).Info().Msg("received shutdown signal.")
 		cancel()
 	}()
+
+	// set before anything of this process runs concurrently
+	listen.SetReusePort(conf.ReusePort)
 
 	err = standalone.Start(ctx, dom.AppInfo{
 		Version: version,

@@ -30,6 +30,7 @@ import (
 
 	"github.com/clyso/chorus/pkg/dom"
 	"github.com/clyso/chorus/pkg/features"
+	"github.com/clyso/chorus/pkg/listen"
 	"github.com/clyso/chorus/pkg/log"
 	"github.com/clyso/chorus/pkg/meta"
 	"github.com/clyso/chorus/pkg/metrics"
@@ -132,8 +133,8 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	proxyServer := http.Server{Addr: fmt.Sprintf(":%d", conf.Port), Handler: handler}
 
 	server := util.NewServer()
-	err = server.Add("proxy_http", func(_ context.Context) error {
-		return proxyServer.ListenAndServe()
+	err = server.Add("proxy_http", func(ctx context.Context) error {
+		return listen.ServeHTTP(ctx, &proxyServer)
 	}, proxyServer.Shutdown)
 	if err != nil {
 		return err

@@ -46,6 +46,12 @@ type Common struct {
 	Metrics  *metrics.Config  `yaml:"metrics,omitempty"`
 	Redis    *Redis           `yaml:"redis,omitempty"`
 	Features *features.Config `yaml:"features,omitempty"`
+
+	// ReusePort lets the listeners of this process share their ports with
+	// another instance, so a new one can serve before the running one stops.
+	// Needs an external redis: with the embedded one each instance would run
+	// its own, and the two would not see each other's state.
+	ReusePort bool `yaml:"reusePort"`
 }
 
 type Redis struct {
