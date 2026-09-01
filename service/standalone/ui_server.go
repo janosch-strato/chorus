@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 
 	"github.com/clyso/chorus/pkg/dom"
+	"github.com/clyso/chorus/pkg/listen"
 )
 
 //go:embed all:static
@@ -46,7 +47,7 @@ func serveUI(ctx context.Context, port int) (func() error, error) {
 		_ = server.Shutdown(context.Background())
 	}()
 	return func() error {
-		err := server.ListenAndServe()
+		err := listen.ServeHTTP(ctx, &server)
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}

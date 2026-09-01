@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/clyso/chorus/pkg/listen"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/rs/cors"
 	"github.com/tmc/grpc-websocket-proxy/wsproxy"
@@ -63,8 +64,8 @@ func GRPCGateway(ctx context.Context, conf *Config, register RegisterHandlersFun
 
 	srv.Handler = handler
 
-	start = func(_ context.Context) error {
-		return srv.ListenAndServe()
+	start = func(ctx context.Context) error {
+		return listen.ServeHTTP(ctx, srv)
 	}
 	stop = func(_ context.Context) error {
 		return srv.Shutdown(context.Background())

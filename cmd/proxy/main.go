@@ -29,6 +29,7 @@ import (
 
 	"github.com/clyso/chorus/pkg/config"
 	"github.com/clyso/chorus/pkg/dom"
+	"github.com/clyso/chorus/pkg/listen"
 	"github.com/clyso/chorus/service/proxy"
 )
 
@@ -69,6 +70,9 @@ func main() {
 	if config.IsFlagPassed("read-from-destination") {
 		conf.ReadFromDestination = *readFromDestination
 	}
+
+	// set before anything of this process runs concurrently
+	listen.SetReusePort(conf.ReusePort)
 
 	err = proxy.Start(ctx, dom.AppInfo{
 		Version: version,

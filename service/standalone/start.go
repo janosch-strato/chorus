@@ -18,30 +18,48 @@ package standalone
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/hibiken/asynq"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/rs/zerolog"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"gopkg.in/yaml.v3"
 
 	"github.com/clyso/chorus/pkg/dom"
 	"github.com/clyso/chorus/pkg/features"
 	"github.com/clyso/chorus/pkg/log"
 	"github.com/clyso/chorus/pkg/s3"
+	"github.com/clyso/chorus/pkg/store"
 	"github.com/clyso/chorus/pkg/util"
+	pb "github.com/clyso/chorus/proto/gen/go/chorus"
 	"github.com/clyso/chorus/service/proxy"
 	"github.com/clyso/chorus/service/worker"
 )
 
-// redisProbeName prefixes the connection name of the startup checks.
-const redisProbeName = "chorus-startup-"
+const (
+	// portProbeTimeout bounds the check for an instance already serving our ports.
+	portProbeTimeout = 500 * time.Millisecond
+	// apiProbeTimeout bounds asking that instance what it replicates. A busy
+	// instance answering late must not stop a rollout.
+	apiProbeTimeout = 5 * time.Second
+	// redisProbeName prefixes the connection name of the startup checks.
+	redisProbeName = "chorus-startup-"
+)
 
 func Start(ctx context.Context, app dom.AppInfo, conf *Config, flushRedis bool) error {
 	// detect fake s3 storages in config
@@ -91,6 +109,18 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, flushRedis bool) 
 
 	// start embedded redis only when no external redis is configured:
 	redisAddrs := conf.Redis.GetAddresses()
+	if conf.ReusePort && len(redisAddrs) == 0 {
+		// Instances sharing their ports must share their state as well.
+		return fmt.Errorf("%w: reusePort needs an external redis, the embedded one is per instance", dom.ErrInvalidArg)
+	}
+
+	// Another instance of this deployment is recognised by the redis it uses,
+	// which is what actually defines an instance: same queues, same policies,
+	// same migration.
+	running, err := instanceRunning(conf)
+	if err != nil {
+		return err
+	}
 	if flushRedis && len(redisAddrs) != 0 {
 		// A flush wipes whole databases, so every other user of one of them
 		// loses its state. Asking redis who is connected to them catches an
@@ -103,6 +133,24 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, flushRedis bool) 
 		if len(used) != 0 {
 			return fmt.Errorf("%w: refusing to flush redis, db %v in use by another instance", dom.ErrInvalidArg, used)
 		}
+	}
+	if occupied := portInUse(conf); occupied != "" {
+		if !conf.ReusePort {
+			return fmt.Errorf("%w: %s is already in use", dom.ErrInvalidArg, occupied)
+		}
+		if !running {
+			// The port answers but nobody is on our redis, so this is a
+			// different deployment: ports mixed up between migrations.
+			return fmt.Errorf("%w: %s is used by an instance that does not share our redis, check the ports", dom.ErrInvalidArg, occupied)
+		}
+		same, err := replicationsMatch(ctx, conf)
+		if err != nil {
+			return fmt.Errorf("%w: %s is in use and its owner did not identify itself: %w", dom.ErrInvalidArg, occupied, err)
+		}
+		if !same {
+			return fmt.Errorf("%w: %s is used by a migration of other buckets, check the ports", dom.ErrInvalidArg, occupied)
+		}
+		logger.Info().Str("addr", occupied).Msg("another instance of this deployment is serving, starting alongside it")
 	}
 	var redisSvc *miniredis.Miniredis
 	if len(redisAddrs) == 0 {
@@ -320,6 +368,19 @@ func getRandomPort() (string, int, error) {
 	return addr, port, nil
 }
 
+// instanceRunning reports whether another chorus is working on the same redis.
+// Workers register themselves in the queue db, so this sees instances on other
+// hosts as well.
+func instanceRunning(conf *Config) (bool, error) {
+	inspector := asynq.NewInspector(util.NewRedisAsynq(conf.Redis, conf.Redis.QueueDB))
+	defer inspector.Close()
+	servers, err := inspector.Servers()
+	if err != nil {
+		return false, fmt.Errorf("unable to look for running instances: %w", err)
+	}
+	return len(servers) != 0, nil
+}
+
 // redisDBsInUse returns those of the databases we would flush that another
 // client is connected to. Own connections are recognised by their name.
 func redisDBsInUse(ctx context.Context, conf *Config) ([]int, error) {
@@ -358,4 +419,79 @@ func redisDBsInUse(ctx context.Context, conf *Config) ([]int, error) {
 	}
 	sort.Ints(used)
 	return used, nil
+}
+
+// replicationsMatch reports whether whoever owns our api port migrates what we
+// are configured to migrate. A migration is identified by the buckets it moves,
+// so an instance that replicates other buckets is another migration, no matter
+// what the two configs have in common. Being registered on our redis says only
+// that some instance of ours is alive, not that it is the one on the port.
+func replicationsMatch(ctx context.Context, conf *Config) (bool, error) {
+	ctx, cancel := context.WithTimeout(ctx, apiProbeTimeout)
+	defer cancel()
+
+	client := util.NewRedis(conf.Redis, conf.Redis.ConfigDB)
+	defer client.Close()
+	ids, err := store.NewReplicationStatusStore(client).GetAllIDs(ctx)
+	if err != nil {
+		return false, fmt.Errorf("unable to read our replications: %w", err)
+	}
+	ours := make([]string, 0, len(ids))
+	for _, id := range ids {
+		ours = append(ours, replicationName(id.User, id.FromStorage, id.FromBucket))
+	}
+
+	theirs, err := portOwnerReplications(ctx, conf)
+	if err != nil {
+		return false, err
+	}
+	slices.Sort(ours)
+	slices.Sort(theirs)
+	return slices.Equal(ours, theirs), nil
+}
+
+// portOwnerReplications asks the api on our port what it replicates.
+func portOwnerReplications(ctx context.Context, conf *Config) ([]string, error) {
+	creds := insecure.NewCredentials()
+	if conf.Api.Secure {
+		// the answer identifies the instance, not the certificate
+		creds = credentials.NewTLS(&tls.Config{InsecureSkipVerify: true}) //nolint:gosec // see above
+	}
+	conn, err := grpc.NewClient(localhost(conf.Api.GrpcPort), grpc.WithTransportCredentials(creds))
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	res, err := pb.NewChorusClient(conn).ListReplications(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(res.Replications))
+	for _, repl := range res.Replications {
+		names = append(names, replicationName(repl.User, repl.From, repl.Bucket))
+	}
+	return names, nil
+}
+
+func replicationName(user, fromStorage, fromBucket string) string {
+	return fmt.Sprintf("%s:%s/%s", user, fromStorage, fromBucket)
+}
+
+// portInUse returns the first address of this instance that something is
+// already listening on, or an empty string.
+func portInUse(conf *Config) string {
+	ports := []int{conf.Api.GrpcPort}
+	if conf.Proxy.Enabled {
+		ports = append(ports, conf.Proxy.Port)
+	}
+	for _, port := range ports {
+		addr := localhost(port)
+		conn, err := net.DialTimeout("tcp", addr, portProbeTimeout)
+		if err != nil {
+			continue
+		}
+		_ = conn.Close()
+		return addr
+	}
+	return ""
 }

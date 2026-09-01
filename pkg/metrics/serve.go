@@ -26,6 +26,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/clyso/chorus/pkg/dom"
+	"github.com/clyso/chorus/pkg/listen"
 )
 
 func Server(ctx context.Context, port int, version dom.AppInfo) (start func(context.Context) error, stop func(context.Context) error) {
@@ -69,7 +70,7 @@ func Server(ctx context.Context, port int, version dom.AppInfo) (start func(cont
 	server := http.Server{Addr: fmt.Sprintf(":%d", port), Handler: mux}
 
 	start = func(_ context.Context) error {
-		return server.ListenAndServe()
+		return listen.ServeHTTP(ctx, &server)
 	}
 	stop = server.Shutdown
 

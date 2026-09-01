@@ -35,6 +35,7 @@ import (
 	"github.com/clyso/chorus/pkg/api/status"
 	"github.com/clyso/chorus/pkg/dom"
 	"github.com/clyso/chorus/pkg/features"
+	"github.com/clyso/chorus/pkg/listen"
 	"github.com/clyso/chorus/pkg/log"
 	"github.com/clyso/chorus/pkg/meta"
 	"github.com/clyso/chorus/pkg/metrics"
@@ -288,7 +289,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 			}
 			statusSrv := &http.Server{Addr: fmt.Sprintf("0.0.0.0:%d", conf.Api.Status.Port), Handler: handler}
 			err = server.Add("status_api",
-				func(_ context.Context) error { return statusSrv.ListenAndServe() },
+				func(ctx context.Context) error { return listen.ServeHTTP(ctx, statusSrv) },
 				func(ctx context.Context) error { return statusSrv.Shutdown(ctx) },
 			)
 			if err != nil {
