@@ -45,6 +45,26 @@ var destinationReadsSkipped = promauto.NewCounterVec(
 	[]string{"reason"},
 )
 
+var headBucketCacheLookups = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "proxy_head_bucket_cache_total",
+		Help: "Bucket existence checks looked up in the cache of the proxy, by result.",
+	},
+	[]string{"result"},
+)
+
+// Results of a bucket existence check looked up in the cache.
+const (
+	CacheHit  = "hit"
+	CacheMiss = "miss"
+)
+
+// ProxyHeadBucketCache counts a bucket existence check that was answered from
+// the cache, or that had to be asked of a storage.
+func ProxyHeadBucketCache(result string) {
+	headBucketCacheLookups.WithLabelValues(result).Inc()
+}
+
 // ProxyDestinationRead counts a read served by the replication destination.
 func ProxyDestinationRead(storage string) {
 	destinationReads.WithLabelValues(storage).Inc()
