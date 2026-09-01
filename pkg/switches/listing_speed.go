@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package tasks
+package switches
 
 import (
 	"fmt"
@@ -23,6 +23,11 @@ import (
 	"github.com/clyso/chorus/pkg/dom"
 )
 
+// Process wide settings an operator can change while chorus runs, over the
+// maint api. A change lasts until the next restart, which starts from the
+// config again, and that is what makes a switch safe to flip on a running
+// migration.
+//
 // How fast a bucket listing produces object copy tasks. Listing is orders of
 // magnitude faster than copying, so at ListingFull millions of tasks pile up
 // in redis long before the copies need them. At ListingAuto the listing stops
@@ -53,8 +58,8 @@ func SetListingSpeed(speed string) error {
 	return nil
 }
 
-// GetListingSpeed returns the listing speed of this process.
-func GetListingSpeed() string {
+// ListingSpeed returns the listing speed of this process.
+func ListingSpeed() string {
 	if listingAuto.Load() {
 		return ListingAuto
 	}

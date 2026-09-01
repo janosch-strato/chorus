@@ -34,7 +34,7 @@ import (
 )
 
 type Config struct {
-	// ListingSpeed is "full" (default) or "auto", see tasks.ListingSpeed. It is
+	// ListingSpeed is "full" (default) or "auto", see switches.ListingSpeed. It is
 	// applied at startup and can be changed at runtime through the maint api,
 	// which lasts until the next restart.
 	ListingSpeed        string        `yaml:"listingSpeed"`

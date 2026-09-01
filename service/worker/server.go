@@ -47,6 +47,7 @@ import (
 	"github.com/clyso/chorus/pkg/s3client"
 	"github.com/clyso/chorus/pkg/storage"
 	"github.com/clyso/chorus/pkg/store"
+	"github.com/clyso/chorus/pkg/switches"
 	"github.com/clyso/chorus/pkg/tasks"
 	"github.com/clyso/chorus/pkg/trace"
 	"github.com/clyso/chorus/pkg/util"
@@ -162,10 +163,10 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	versionedMigrationSvc := handler.NewVersionedMigrationSvc(policySvc, copySvc, objectVersionInfoStore, objectLocker, conf.Worker.PauseRetryInterval)
 	versionedMigrationCtrl := handler.NewVersionedMigrationCtrl(versionedMigrationSvc, taskClient)
 
-	if err = tasks.SetListingSpeed(conf.Worker.ListingSpeed); err != nil {
+	if err = switches.SetListingSpeed(conf.Worker.ListingSpeed); err != nil {
 		return err
 	}
-	logger.Info().Str("listing_speed", tasks.GetListingSpeed()).Msg("bucket listing speed")
+	logger.Info().Str("listing_speed", switches.ListingSpeed()).Msg("bucket listing speed")
 
 	workerSvc := handler.New(conf.Worker, s3Clients, versionSvc, policySvc, storageSvc, rc, taskClient, queueSvc, limiter, objectLocker, bucketLocker, replicationStatusLocker)
 

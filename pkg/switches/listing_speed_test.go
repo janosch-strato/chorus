@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package tasks
+package switches
 
 import (
 	"testing"
@@ -28,16 +28,16 @@ func Test_ListingSpeed(t *testing.T) {
 	r := require.New(t)
 	defer func() { r.NoError(SetListingSpeed(ListingFull)) }()
 
-	r.Equal(ListingFull, GetListingSpeed(), "full speed unless configured otherwise")
+	r.Equal(ListingFull, ListingSpeed(), "full speed unless configured otherwise")
 
 	r.NoError(SetListingSpeed(ListingAuto))
-	r.Equal(ListingAuto, GetListingSpeed())
+	r.Equal(ListingAuto, ListingSpeed())
 
 	// an unset config value keeps the default rather than failing a startup
 	r.NoError(SetListingSpeed(""))
-	r.Equal(ListingFull, GetListingSpeed())
+	r.Equal(ListingFull, ListingSpeed())
 
 	r.NoError(SetListingSpeed(ListingAuto))
 	r.ErrorIs(SetListingSpeed("paused"), dom.ErrInvalidArg)
-	r.Equal(ListingAuto, GetListingSpeed(), "a rejected speed changes nothing")
+	r.Equal(ListingAuto, ListingSpeed(), "a rejected speed changes nothing")
 }

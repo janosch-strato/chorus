@@ -33,6 +33,7 @@ import (
 	"github.com/clyso/chorus/pkg/dom"
 	"github.com/clyso/chorus/pkg/entity"
 	"github.com/clyso/chorus/pkg/policy"
+	"github.com/clyso/chorus/pkg/switches"
 	"github.com/clyso/chorus/pkg/tasks"
 	pb "github.com/clyso/chorus/proto/gen/go/chorus"
 )
@@ -616,21 +617,21 @@ func handleListingSpeed(logger zerolog.Logger, w http.ResponseWriter, r *http.Re
 	}
 	switch r.Method {
 	case http.MethodGet:
-		write(http.StatusOK, listingSpeedResponse{Speed: tasks.GetListingSpeed()})
+		write(http.StatusOK, listingSpeedResponse{Speed: switches.ListingSpeed()})
 	case http.MethodPut, http.MethodPost:
 		speed := strings.TrimSpace(r.URL.Query().Get("speed"))
-		if err := tasks.SetListingSpeed(speed); err != nil || speed == "" {
+		if err := switches.SetListingSpeed(speed); err != nil || speed == "" {
 			write(http.StatusBadRequest, listingSpeedResponse{
-				Speed: tasks.GetListingSpeed(),
-				Error: fmt.Sprintf("speed query parameter must be %s or %s", tasks.ListingFull, tasks.ListingAuto),
+				Speed: switches.ListingSpeed(),
+				Error: fmt.Sprintf("speed query parameter must be %s or %s", switches.ListingFull, switches.ListingAuto),
 			})
 			return
 		}
 		logger.Info().Str("listing_speed", speed).Msg("bucket listing speed changed")
-		write(http.StatusOK, listingSpeedResponse{Speed: tasks.GetListingSpeed()})
+		write(http.StatusOK, listingSpeedResponse{Speed: switches.ListingSpeed()})
 	default:
 		write(http.StatusMethodNotAllowed, listingSpeedResponse{
-			Speed: tasks.GetListingSpeed(),
+			Speed: switches.ListingSpeed(),
 			Error: "use GET to read and PUT to change the listing speed",
 		})
 	}

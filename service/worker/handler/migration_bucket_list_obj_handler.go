@@ -35,6 +35,7 @@ import (
 	// "github.com/clyso/chorus/pkg/features"
 
 	"github.com/clyso/chorus/pkg/log"
+	"github.com/clyso/chorus/pkg/switches"
 	"github.com/clyso/chorus/pkg/tasks"
 )
 
@@ -98,7 +99,7 @@ func (s *svc) HandleMigrationBucketListObj(ctx context.Context, t *asynq.Task) e
 		// too, so a listing also stops when the copies are failing. The
 		// listing resumes from the stored cursor, so it can stop anywhere.
 		listed++
-		if listed%listingCheckEvery == 0 && tasks.GetListingSpeed() == tasks.ListingAuto {
+		if listed%listingCheckEvery == 0 && switches.ListingSpeed() == switches.ListingAuto {
 			queued, err := s.queueSvc.UnprocessedCount(ctx, true, copyQueue)
 			if err != nil {
 				logger.Err(err).Msg("migration bucket list obj: unable to check the copy queue")
