@@ -24,7 +24,14 @@ import (
 )
 
 func NewRedis(conf *config.Redis, db int) redis.UniversalClient {
+	return NewRedisNamed(conf, db, "")
+}
+
+// NewRedisNamed is NewRedis with a connection name, which redis reports as the
+// name field of CLIENT LIST. Use it to recognise own connections there.
+func NewRedisNamed(conf *config.Redis, db int, name string) redis.UniversalClient {
 	opt := &redis.UniversalOptions{
+		ClientName:       name,
 		Addrs:            conf.GetAddresses(),
 		DB:               db,
 		Username:         conf.User,
