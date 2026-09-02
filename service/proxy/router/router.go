@@ -44,7 +44,6 @@ func NewRouter(
 	versionSvc meta.VersionService,
 	policySvc policy.Service,
 	storageSvc storage.Service,
-	queueSvc tasks.QueueService,
 	limit ratelimit.RPM) Router {
 	return &router{
 		clients:    clients,
@@ -52,7 +51,6 @@ func NewRouter(
 		versionSvc: versionSvc,
 		policySvc:  policySvc,
 		storageSvc: storageSvc,
-		queueSvc:   queueSvc,
 		limit:      limit,
 	}
 }
@@ -63,7 +61,6 @@ type router struct {
 	versionSvc meta.VersionService
 	policySvc  policy.Service
 	storageSvc storage.Service
-	queueSvc   tasks.QueueService
 	limit      ratelimit.RPM
 }
 
