@@ -98,8 +98,15 @@ func (s *svc) HandleMigrationBucketListObj(ctx context.Context, t *asynq.Task) e
 		// objects they cannot get to for days. The count covers retried tasks
 		// too, so a listing also stops when the copies are failing. The
 		// listing resumes from the stored cursor, so it can stop anywhere.
+		//
+		// The first object of a run is checked as well, so that a listing
+		// resumed into a queue that is still full parks again at once instead
+		// of adding another listingCheckEvery objects to it. It has to list
+		// that one object first: a continuation is identified by the cursor it
+		// starts from, and a cursor that has not moved names the running task
+		// itself, whose id is still taken.
 		listed++
-		if listed%listingCheckEvery == 0 && switches.ListingSpeed() == switches.ListingAuto {
+		if listed%listingCheckEvery == 1 && switches.ListingSpeed() == switches.ListingAuto {
 			queued, err := s.queueSvc.UnprocessedCount(ctx, true, copyQueue)
 			if err != nil {
 				logger.Err(err).Msg("migration bucket list obj: unable to check the copy queue")
