@@ -87,15 +87,6 @@ func replicationQueueName(queuePrefix Queue, id entity.ReplicationStatusID) stri
 	}
 }
 
-// MigrateObjCopyRetention is the period a finished object copy task is kept in
-// its queue. Retained tasks are the record of which objects the initial
-// migration has copied, which the proxy readFromDestination option consults to
-// decide whether a read may be served by the destination storage. The record
-// has to outlive the migration, so the same "long enough for everything" span
-// as the task timeout below is used. The retained tasks are freed when the
-// replication and its queues are deleted.
-const MigrateObjCopyRetention = 100 * 365 * 24 * time.Hour
-
 // MigrateBucketListObjectsTaskID returns the task id of the listing task for a
 // bucket and prefix.
 func MigrateBucketListObjectsTaskID(fromStorage, toStorage, bucket, toBucket, prefix string) string {
@@ -368,7 +359,7 @@ func NewReplicationTask[T ReplicationTask](ctx context.Context, replicationID en
 	case MigrateObjCopyPayload:
 		id := MigrateObjCopyTaskID(p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket, p.Obj.Name, p.Obj.VersionID)
 		queue := MigrateObjCopyQueue(replicationID)
-		optionList = []asynq.Option{asynq.Queue(queue), asynq.TaskID(id), asynq.Retention(MigrateObjCopyRetention)}
+		optionList = []asynq.Option{asynq.Queue(queue), asynq.TaskID(id)}
 		taskType = TypeMigrateObjCopy
 	case MigrateVersionedObjectPayload:
 		id := fmt.Sprintf("mgr:cov:%s:%s:%s:%s", p.FromStorage, p.ToStorage, p.Bucket, p.Prefix)

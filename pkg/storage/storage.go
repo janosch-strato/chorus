@@ -27,6 +27,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/clyso/chorus/pkg/dom"
+	"github.com/clyso/chorus/pkg/entity"
 	"github.com/clyso/chorus/pkg/tasks"
 )
 
@@ -80,6 +81,14 @@ type Service interface {
 	SetLastListedObj(ctx context.Context, task tasks.MigrateBucketListObjectsPayload, val string) error
 	DelLastListedObj(ctx context.Context, task tasks.MigrateBucketListObjectsPayload) error
 	CleanLastListedObj(ctx context.Context, fromStor, toStor, fromBucket string, toBucket string) error
+
+	// The objects a migration has copied. They exist for the readFromDestination
+	// mode of the proxy, which serves reads of a copied object from the
+	// destination storage while the migration runs.
+	SetMigratedObj(ctx context.Context, id entity.ReplicationStatusID, object string) error
+	IsMigratedObj(ctx context.Context, id entity.ReplicationStatusID, object string) (bool, error)
+	DelMigratedObj(ctx context.Context, id entity.ReplicationStatusID, object string) error
+	DelAllMigratedObjs(ctx context.Context, id entity.ReplicationStatusID) error
 
 	StoreUploadID(ctx context.Context, user, bucket, object, uploadID string, ttl time.Duration) error
 	DeleteUploadID(ctx context.Context, user, bucket, object, uploadID string) error
@@ -158,6 +167,29 @@ func (s *svc) SetLastListedObj(ctx context.Context, task tasks.MigrateBucketList
 		key += ":" + task.Prefix
 	}
 	return s.client.Set(ctx, key, val, lastListedObjTTL).Err()
+}
+
+// migratedObjsKey names the set of objects a migration has copied, one set per
+// replication. Only readFromDestination reads these records, and a migration
+// that is not in that mode never writes them.
+func migratedObjsKey(id entity.ReplicationStatusID) string {
+	return fmt.Sprintf("s:read-from-destination:%s:%s:%s:%s:%s", id.User, id.FromStorage, id.FromBucket, id.ToStorage, id.ToBucket)
+}
+
+func (s *svc) SetMigratedObj(ctx context.Context, id entity.ReplicationStatusID, object string) error {
+	return s.client.SAdd(ctx, migratedObjsKey(id), object).Err()
+}
+
+func (s *svc) IsMigratedObj(ctx context.Context, id entity.ReplicationStatusID, object string) (bool, error) {
+	return s.client.SIsMember(ctx, migratedObjsKey(id), object).Result()
+}
+
+func (s *svc) DelMigratedObj(ctx context.Context, id entity.ReplicationStatusID, object string) error {
+	return s.client.SRem(ctx, migratedObjsKey(id), object).Err()
+}
+
+func (s *svc) DelAllMigratedObjs(ctx context.Context, id entity.ReplicationStatusID) error {
+	return s.client.Del(ctx, migratedObjsKey(id)).Err()
 }
 
 func (s *svc) StoreUploadID(ctx context.Context, user, bucket, object, uploadID string, ttl time.Duration) error {
