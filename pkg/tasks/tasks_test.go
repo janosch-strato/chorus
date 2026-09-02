@@ -90,10 +90,9 @@ func Test_migrate_obj_copy_task_is_retained(t *testing.T) {
 
 	info, err := client.EnqueueContext(ctx, task)
 	r.NoError(err)
-	// completed copy tasks are the record of the objects the migration copied,
-	// so they must outlive the migration
-	r.EqualValues(MigrateObjCopyRetention, info.Retention)
-	// the proxy looks the task up without seeing the task itself
+	// a finished copy task is not kept: the copies are recorded per object
+	// by the worker, see storage.SetMigratedObj
+	r.Zero(info.Retention)
 	r.EqualValues(MigrateObjCopyQueue(replicationID), info.Queue)
 	r.EqualValues(MigrateObjCopyTaskID("src", "dst", "buck", "dst-buck", "dir/obj", ""), info.ID)
 }

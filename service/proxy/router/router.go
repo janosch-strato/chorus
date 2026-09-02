@@ -44,7 +44,6 @@ func NewRouter(
 	versionSvc meta.VersionService,
 	policySvc policy.Service,
 	storageSvc storage.Service,
-	queueSvc tasks.QueueService,
 	limit ratelimit.RPM,
 	readFromDestination bool) Router {
 	return &router{
@@ -53,7 +52,6 @@ func NewRouter(
 		versionSvc:          versionSvc,
 		policySvc:           policySvc,
 		storageSvc:          storageSvc,
-		queueSvc:            queueSvc,
 		limit:               limit,
 		readFromDestination: readFromDestination,
 		headCache:           newHeadBucketCache(),
@@ -66,7 +64,6 @@ type router struct {
 	versionSvc meta.VersionService
 	policySvc  policy.Service
 	storageSvc storage.Service
-	queueSvc   tasks.QueueService
 	limit      ratelimit.RPM
 	// readFromDestination serves reads of already migrated objects from the
 	// replication destination, see read_destination.go. It also enables the

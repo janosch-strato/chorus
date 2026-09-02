@@ -26,6 +26,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/rs/zerolog"
 
+	xctx "github.com/clyso/chorus/pkg/ctx"
 	"github.com/clyso/chorus/pkg/dom"
 	"github.com/clyso/chorus/pkg/entity"
 	"github.com/clyso/chorus/pkg/log"
@@ -132,6 +133,22 @@ func (s *svc) HandleMigrationObjCopy(ctx context.Context, t *asynq.Task) (err er
 		err = s.versionSvc.UpdateIfGreater(ctx, domObj, destVersionKey, fromVer)
 		if err != nil {
 			return fmt.Errorf("migration obj copy: unable to update obj meta: %w", err)
+		}
+	}
+	// The record the proxy reads to serve this object from the destination
+	// while the readFromDestination mode is on. Nothing else reads it, so
+	// without that mode there is nothing to record. Versioned copies are not
+	// served from the destination either.
+	if s.conf.ReadFromDestination && p.Obj.VersionID == "" {
+		replicationID := entity.ReplicationStatusID{
+			User:        xctx.GetUser(ctx),
+			FromStorage: p.FromStorage,
+			FromBucket:  p.Bucket,
+			ToStorage:   p.ToStorage,
+			ToBucket:    p.ToBucket,
+		}
+		if err = s.storageSvc.SetMigratedObj(ctx, replicationID, p.Obj.Name); err != nil {
+			return fmt.Errorf("migration obj copy: unable to record the copied object: %w", err)
 		}
 	}
 	logger.Info().

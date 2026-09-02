@@ -37,7 +37,11 @@ type Config struct {
 	// ListingSpeed is "full" (default) or "auto", see switches.ListingSpeed. It is
 	// applied at startup and can be changed at runtime through the maint api,
 	// which lasts until the next restart.
-	ListingSpeed        string        `yaml:"listingSpeed"`
+	ListingSpeed string `yaml:"listingSpeed"`
+	// ReadFromDestination is the proxy setting of the same name. The worker
+	// keeps the per object records that mode reads, and keeps none without it.
+	// The standalone binary takes the setting from the proxy section.
+	ReadFromDestination bool          `yaml:"readFromDestination"`
 	PauseRetryInterval  time.Duration `yaml:"pauseRetryInterval"`
 	SwitchRetryInterval time.Duration `yaml:"switchRetryInterval"`
 	QueueUpdateInterval time.Duration `yaml:"queueUpdateInterval"`
