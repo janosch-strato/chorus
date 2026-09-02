@@ -21,12 +21,11 @@
 // slow, the readFromDestination option lets the proxy answer reads of objects
 // that the migration has already copied from the destination storage instead.
 //
-// An object counts as migrated when its copy task has completed. Copy tasks are
-// enqueued with a retention period, so a completed task stays in its queue and
-// serves as the per object record of the finished copy. Everything the proxy
-// wrote afterwards is visible in the object version metadata, so a destination
+// An object counts as migrated when the worker has recorded its copy, which it
+// does per replication in a set of object names. Everything the proxy wrote
+// afterwards is visible in the object version metadata, so a destination
 // version behind the source version disqualifies the object again. Objects
-// deleted through the proxy have their copy record removed, see
+// deleted through the proxy have their record removed, see
 // dropMigratedRecord().
 //
 // The decision is per object and never trusted blindly: a destination that
@@ -40,9 +39,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
-	"github.com/hibiken/asynq"
 	"github.com/rs/zerolog"
 
 	xctx "github.com/clyso/chorus/pkg/ctx"
@@ -52,13 +49,12 @@ import (
 	"github.com/clyso/chorus/pkg/meta"
 	"github.com/clyso/chorus/pkg/metrics"
 	"github.com/clyso/chorus/pkg/s3"
-	"github.com/clyso/chorus/pkg/tasks"
 )
 
 // Reasons for keeping a read on the source storage although reading from the
 // destination is enabled. They are exported as the reason label of the
 // proxy_destination_reads_skipped_total metric, so the set stays small and
-// stable. The copy task states are reported with the skipCopyStatePrefix.
+// stable.
 const (
 	skipSwitchInProgress  = "switch_in_progress"
 	skipNoObject          = "no_object"
@@ -70,9 +66,8 @@ const (
 	skipPolicyError       = "policy_error"
 	skipMetaError         = "meta_error"
 	skipDestinationBehind = "destination_behind"
-	skipQueueError        = "queue_error"
+	skipRecordError       = "record_error"
 	skipNotCopied         = "not_copied"
-	skipCopyStatePrefix   = "copy_"
 )
 
 // destinationReadRoute tells whether the request may be served by the
@@ -170,33 +165,20 @@ func (r *router) objectMigrated(ctx context.Context, source, user, bucket, objec
 		return skipDestinationBehind
 	}
 
-	queue, taskID := migrationCopyTask(source, user, bucket, object, dest)
-	// asynq brings its own redis client, which the timing hook does not see
-	queueStart := time.Now()
-	state, err := r.queueSvc.GetTaskState(ctx, queue, taskID)
-	xctx.GetTiming(ctx).AddRedis(time.Since(queueStart))
+	migrated, err := r.storageSvc.IsMigratedObj(ctx, migrationID(source, user, bucket, dest), object)
 	if err != nil {
-		if errors.Is(err, dom.ErrNotFound) {
-			// not copied yet, or the record is gone
-			return skipNotCopied
-		}
-		zerolog.Ctx(ctx).Err(err).Msg("read from destination: unable to get copy task state")
-		return skipQueueError
+		zerolog.Ctx(ctx).Err(err).Msg("read from destination: unable to read the migrated object record")
+		return skipRecordError
 	}
-	if state != asynq.TaskStateCompleted {
-		// queued for a copy, or the copy failed for good
-		return skipCopyStatePrefix + state.String()
+	if !migrated {
+		return skipNotCopied
 	}
 	return ""
 }
 
-// migrationCopyTask returns queue and task id of the object copy task that
-// migrates the object to the given destination.
-func migrationCopyTask(source, user, bucket, object string, dest entity.ReplicationPolicyDestination) (queue, taskID string) {
-	replicationID := entity.NewReplicationStatusID(user, source, bucket, dest.Storage, dest.Bucket)
-	// Versioned migrations are not supported here, so the copy task of the
-	// current object version has no version id.
-	return tasks.MigrateObjCopyQueue(replicationID), tasks.MigrateObjCopyTaskID(source, dest.Storage, bucket, dest.Bucket, object, "")
+// migrationID names the replication the bucket is migrated by.
+func migrationID(source, user, bucket string, dest entity.ReplicationPolicyDestination) entity.ReplicationStatusID {
+	return entity.NewReplicationStatusID(user, source, bucket, dest.Storage, dest.Bucket)
 }
 
 // dropMigratedRecord removes the record that the object has been migrated. The
@@ -213,8 +195,7 @@ func (r *router) dropMigratedRecord(ctx context.Context, source, object string) 
 	if reason != "" {
 		return
 	}
-	queue, taskID := migrationCopyTask(source, user, bucket, object, dest)
-	if err := r.queueSvc.DeleteTask(ctx, queue, taskID); err != nil {
+	if err := r.storageSvc.DelMigratedObj(ctx, migrationID(source, user, bucket, dest), object); err != nil {
 		zerolog.Ctx(ctx).Err(err).Str(log.Object, object).Msg("read from destination: unable to drop migrated object record")
 	}
 }

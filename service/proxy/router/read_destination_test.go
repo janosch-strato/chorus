@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hibiken/asynq"
 	"github.com/stretchr/testify/require"
 
 	xctx "github.com/clyso/chorus/pkg/ctx"
@@ -31,6 +30,7 @@ import (
 	"github.com/clyso/chorus/pkg/meta"
 	"github.com/clyso/chorus/pkg/policy"
 	"github.com/clyso/chorus/pkg/s3"
+	"github.com/clyso/chorus/pkg/storage"
 	"github.com/clyso/chorus/pkg/tasks"
 	"github.com/clyso/chorus/pkg/testutil"
 )
@@ -52,11 +52,10 @@ func readReq(method s3.Method, object, target string) *http.Request {
 	return req.WithContext(ctx)
 }
 
-// setCopyState puts the object copy task of the migration into the given state.
-func setCopyState(queueSvc *tasks.QueueServiceMock, object string, state asynq.TaskState) {
-	dest := entity.NewBucketReplicationPolicyDestination(testDest, testBucket)
-	queue, taskID := migrationCopyTask(testSource, testUser, testBucket, object, dest)
-	queueSvc.SetTaskState(queue, taskID, state)
+// setMigrated records the object as copied by the migration.
+func setMigrated(t *testing.T, storageSvc storage.Service, object string) {
+	id := entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket)
+	require.NoError(t, storageSvc.SetMigratedObj(t.Context(), id, object))
 }
 
 func Test_router_destinationReadRoute(t *testing.T) {
@@ -69,18 +68,18 @@ func Test_router_destinationReadRoute(t *testing.T) {
 	require.NoError(t, err)
 
 	versionSvc := meta.NewVersionService(c)
-	queueSvc := &tasks.QueueServiceMock{}
+	storageSvc := storage.New(c)
 	rt := &router{
 		policySvc:           policySvc,
 		versionSvc:          versionSvc,
-		queueSvc:            queueSvc,
+		storageSvc:          storageSvc,
 		readFromDestination: true,
 	}
 
 	t.Run("migrated object is read from destination", func(t *testing.T) {
 		r := require.New(t)
 		object := "migrated"
-		setCopyState(queueSvc, object, asynq.TaskStateCompleted)
+		setMigrated(t, storageSvc, object)
 
 		destStorage, destBucket, ok := rt.destinationReadRoute(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
 		r.True(ok)
@@ -104,22 +103,16 @@ func Test_router_destinationReadRoute(t *testing.T) {
 		r.Equal(skipNotCopied, reason)
 	})
 
-	t.Run("object waiting to be copied is read from source", func(t *testing.T) {
+	t.Run("record of a deleted object is dropped", func(t *testing.T) {
 		r := require.New(t)
-		object := "pending"
-		setCopyState(queueSvc, object, asynq.TaskStatePending)
+		object := "deleted"
+		setMigrated(t, storageSvc, object)
+
+		ctx := xctx.SetBucket(xctx.SetUser(t.Context(), testUser), testBucket)
+		rt.dropMigratedRecord(ctx, testSource, object)
 
 		_, _, reason := rt.destinationReadDecision(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
-		r.Equal(skipCopyStatePrefix+"pending", reason)
-	})
-
-	t.Run("object whose copy failed is read from source", func(t *testing.T) {
-		r := require.New(t)
-		object := "archived"
-		setCopyState(queueSvc, object, asynq.TaskStateArchived)
-
-		_, _, reason := rt.destinationReadDecision(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
-		r.Equal(skipCopyStatePrefix+"archived", reason)
+		r.Equal(skipNotCopied, reason)
 	})
 
 	t.Run("listings are read from source", func(t *testing.T) {
@@ -156,7 +149,7 @@ func Test_router_destinationReadRoute(t *testing.T) {
 	t.Run("object written after the copy is read from source", func(t *testing.T) {
 		r := require.New(t)
 		object := "overwritten"
-		setCopyState(queueSvc, object, asynq.TaskStateCompleted)
+		setMigrated(t, storageSvc, object)
 		obj := dom.Object{Bucket: testBucket, Name: object}
 		version, err := versionSvc.IncrementObj(ctx, obj, meta.ToDest(testSource, ""))
 		r.NoError(err)
@@ -307,7 +300,7 @@ func Test_router_adjustObjReadRoute_reportsSwitchInProgress(t *testing.T) {
 	r.NoError(policySvc.ObjListStarted(ctx, replID))
 	queueSvc.InitReplicationDone(replID)
 
-	rt := &router{policySvc: policySvc, versionSvc: meta.NewVersionService(c), queueSvc: queueSvc, readFromDestination: true}
+	rt := &router{policySvc: policySvc, versionSvc: meta.NewVersionService(c), readFromDestination: true}
 	req := readReq(s3.GetObject, "migrated", "/"+testBucket+"/migrated")
 
 	storage, switchInProgress, err := rt.adjustObjReadRoute(req.Context(), testSource, testUser, testBucket)
