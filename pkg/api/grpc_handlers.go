@@ -696,6 +696,10 @@ func (h *handlers) DeleteReplication(ctx context.Context, req *pb.ReplicationReq
 		if err != nil {
 			return fmt.Errorf("%w: unable to delete list obj metadata", err)
 		}
+		err = h.storageSvc.DelAllMigratedObjs(ctx, replicationID)
+		if err != nil {
+			return fmt.Errorf("%w: unable to delete migrated object records", err)
+		}
 		err = h.notificationSvc.DeleteBucketNotification(ctx, req.From, req.User, req.Bucket)
 		if err != nil {
 			zerolog.Ctx(ctx).Err(err).Msg("unable to delete agent bucket notification")
