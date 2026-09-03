@@ -617,16 +617,16 @@ func (h *handlers) DeleteUserReplication(ctx context.Context, req *pb.DeleteUser
 		if err != nil {
 			return err
 		}
-		for _, bucket := range deleted {
-			err = h.versionSvc.DeleteBucketMeta(ctx, meta.ToDest(req.To, ""), bucket)
+		for _, id := range deleted {
+			err = h.versionSvc.DeleteBucketMeta(ctx, meta.ToDest(id.ToStorage, id.ToBucket), id.FromBucket)
 			if err != nil {
 				zerolog.Ctx(ctx).Err(err).Msg("unable to delete bucket version metadata")
 			}
-			err = h.storageSvc.CleanLastListedObj(ctx, req.From, req.To, bucket, bucket)
+			err = h.storageSvc.CleanLastListedObj(ctx, id.FromStorage, id.ToStorage, id.FromBucket, id.ToBucket)
 			if err != nil {
 				zerolog.Ctx(ctx).Err(err).Msg("unable to delete bucket obj list metadata")
 			}
-			err = h.notificationSvc.DeleteBucketNotification(ctx, req.From, req.User, bucket)
+			err = h.notificationSvc.DeleteBucketNotification(ctx, req.From, req.User, id.FromBucket)
 			if err != nil {
 				zerolog.Ctx(ctx).Err(err).Msg("unable to delete agent bucket notification")
 			}
