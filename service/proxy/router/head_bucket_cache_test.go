@@ -64,6 +64,13 @@ func Test_headBucketCache(t *testing.T) {
 
 		r.False(cache.enabled())
 		r.Nil(cache.get(testUser, testBucket), "the entry is gone, not just unused")
+
+		cache.put(testUser, testBucket, answer)
+		r.Nil(cache.get(testUser, testBucket), "a request in flight does not refill it")
+
+		switches.SetHeadBucketCache(true)
+		r.True(cache.enabled())
+		r.Nil(cache.get(testUser, testBucket), "switched on again it starts from nothing")
 	})
 
 	t.Run("a remembered bucket is answered without a storage", func(t *testing.T) {

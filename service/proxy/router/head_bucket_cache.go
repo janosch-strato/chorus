@@ -39,6 +39,7 @@ package router
 import (
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	xctx "github.com/clyso/chorus/pkg/ctx"
@@ -62,10 +63,15 @@ var headerNotReplayed = map[string]struct{}{
 type headBucketCache struct {
 	mu      sync.RWMutex
 	answers map[string]http.Header
+	// on is what the switch said when a request last looked, so that turning
+	// it off clears the answers once instead of on every request while off.
+	on atomic.Bool
 }
 
 func newHeadBucketCache() *headBucketCache {
-	return &headBucketCache{answers: map[string]http.Header{}}
+	c := &headBucketCache{answers: map[string]http.Header{}}
+	c.on.Store(switches.HeadBucketCache())
+	return c
 }
 
 func headBucketKey(user, bucket string) string {
@@ -78,13 +84,13 @@ func headBucketKey(user, bucket string) string {
 // forgets what it holds: an operator who turns it off wants the storage asked
 // again, not a memory that outlives the switch.
 func (c *headBucketCache) enabled() bool {
-	if switches.HeadBucketCache() {
-		return true
+	on := switches.HeadBucketCache()
+	if c.on.Swap(on) && !on {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		clear(c.answers)
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	clear(c.answers)
-	return false
+	return on
 }
 
 // get returns the headers of a remembered check, or nil if there is none.
@@ -105,6 +111,10 @@ func (c *headBucketCache) put(user, bucket string, header http.Header) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if !switches.HeadBucketCache() {
+		// switched off while the storage was answering this request
+		return
+	}
 	c.answers[headBucketKey(user, bucket)] = keep
 }
 
