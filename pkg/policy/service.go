@@ -87,7 +87,7 @@ type Service interface {
 	DeleteReplication(ctx context.Context, id entity.ReplicationStatusID) error
 	// Archive replication. Will stop generating new events for this replication.
 	// Existing events will be processed and replication status metadata will be kept.
-	DeleteBucketReplicationsByUser(ctx context.Context, user, from string, to string) ([]string, error)
+	DeleteBucketReplicationsByUser(ctx context.Context, user, from string, to string) ([]entity.ReplicationStatusID, error)
 
 	// public config accessor
 	Config() *s3.StorageConfig
@@ -547,13 +547,13 @@ func (r *policySvc) DeleteUserReplication(ctx context.Context, user string, poli
 	return nil
 }
 
-func (r *policySvc) DeleteBucketReplicationsByUser(ctx context.Context, user, fromStorage string, toStorage string) ([]string, error) {
+func (r *policySvc) DeleteBucketReplicationsByUser(ctx context.Context, user, fromStorage string, toStorage string) ([]entity.ReplicationStatusID, error) {
 	ids, err := r.replicationStatusStore.GetAllIDs(ctx, user)
 	if err != nil {
 		return nil, fmt.Errorf("unable to get replication ids: %w", err)
 	}
 
-	deleted := []string{}
+	deleted := []entity.ReplicationStatusID{}
 	for _, id := range ids {
 		if id.FromStorage != fromStorage || id.ToStorage != toStorage {
 			continue
@@ -562,7 +562,7 @@ func (r *policySvc) DeleteBucketReplicationsByUser(ctx context.Context, user, fr
 			zerolog.Ctx(ctx).Err(err).Msg("unable to delte replication")
 			continue
 		}
-		deleted = append(deleted, id.FromBucket)
+		deleted = append(deleted, id)
 	}
 	return deleted, nil
 }
