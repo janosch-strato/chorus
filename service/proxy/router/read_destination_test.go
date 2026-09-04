@@ -17,11 +17,13 @@
 package router
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 
 	xctx "github.com/clyso/chorus/pkg/ctx"
@@ -32,6 +34,7 @@ import (
 	"github.com/clyso/chorus/pkg/s3"
 	"github.com/clyso/chorus/pkg/settings"
 	"github.com/clyso/chorus/pkg/storage"
+	"github.com/clyso/chorus/pkg/store"
 	"github.com/clyso/chorus/pkg/tasks"
 	"github.com/clyso/chorus/pkg/testutil"
 )
@@ -59,14 +62,26 @@ func setMigrated(t *testing.T, storageSvc storage.Service, object string) {
 	require.NoError(t, storageSvc.SetMigratedObj(t.Context(), id, object))
 }
 
+// liveSync ends the initial sync of the replication the way the last copy of
+// it does, and puts it back for the cases that follow.
+func liveSync(t *testing.T, ctx context.Context, c redis.UniversalClient, policySvc policy.Service, id entity.ReplicationStatusID) {
+	require.NoError(t, policySvc.LiveSyncStarted(ctx, id))
+	key, err := store.NewReplicationStatusStore(c).MakeKey(id)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, c.HSet(ctx, key, "live_sync", false).Err()) })
+}
+
 func Test_router_destinationReadRoute(t *testing.T) {
 	ctx := t.Context()
 	c := testutil.SetupRedis(t)
 
+	replID := entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket)
 	policySvc := policy.NewService(c, nil, nil)
 	require.NoError(t, policySvc.AddBucketRoutingPolicy(ctx, entity.NewBucketRoutingPolicyID(testUser, testBucket), testSource, false))
-	_, err := policySvc.AddBucketReplicationPolicy(ctx, entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket), nil)
+	_, err := policySvc.AddBucketReplicationPolicy(ctx, replID, nil)
 	require.NoError(t, err)
+	// the initial sync is running: the migrated records decide
+	require.NoError(t, policySvc.ListingDone(ctx, replID))
 
 	versionSvc := meta.NewVersionService(c)
 	storageSvc := storage.New(c)
@@ -120,6 +135,26 @@ func Test_router_destinationReadRoute(t *testing.T) {
 		pending, err := storageSvc.IsPendingDeleteObj(ctx, id, object)
 		r.NoError(err)
 		r.True(pending, "the destination holds it until the deletion is replicated")
+	})
+
+	t.Run("with the initial sync done everything is read from the destination", func(t *testing.T) {
+		r := require.New(t)
+		object := "never-recorded"
+		liveSync(t, ctx, c, policySvc, replID)
+
+		_, _, reason := rt.destinationReadDecision(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
+		r.Empty(reason, "no record needed once everything is copied")
+	})
+
+	t.Run("with the initial sync done a pending delete is read from source", func(t *testing.T) {
+		r := require.New(t)
+		object := "deleted-in-live-sync"
+		r.NoError(storageSvc.ObjectDeleted(ctx, replID, object))
+		t.Cleanup(func() { r.NoError(storageSvc.DelPendingDeleteObj(ctx, replID, object)) })
+		liveSync(t, ctx, c, policySvc, replID)
+
+		_, _, reason := rt.destinationReadDecision(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
+		r.Equal(skipPendingDelete, reason)
 	})
 
 	t.Run("listings are read from source", func(t *testing.T) {
@@ -208,6 +243,7 @@ func Test_router_destinationReadRoute(t *testing.T) {
 		_, _, reason := rt.destinationReadDecision(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
 		r.Equal(skipManyDestinations, reason)
 	})
+
 }
 
 func Test_rewriteBucket(t *testing.T) {
