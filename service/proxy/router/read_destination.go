@@ -25,8 +25,7 @@
 // does per replication in a set of object names. Everything the proxy wrote
 // afterwards is visible in the object version metadata, so a destination
 // version behind the source version disqualifies the object again. Objects
-// deleted through the proxy have their record removed, see
-// dropMigratedRecord().
+// deleted through the proxy have their record removed, see objectDeleted().
 //
 // The decision is per object and never trusted blindly: a destination that
 // cannot answer the read makes the request fall back to the source storage.
@@ -182,12 +181,13 @@ func migrationID(source, user, bucket string, dest entity.ReplicationPolicyDesti
 	return entity.NewReplicationStatusID(user, source, bucket, dest.Storage, dest.Bucket)
 }
 
-// dropMigratedRecord removes the record that the object has been migrated. The
-// object no longer exists on the source storage, and until the deletion has
-// been replicated the destination still holds it, so reads have to go back to
-// the source storage. Dropping the record also allows the object to be copied
-// again should it reappear.
-func (r *router) dropMigratedRecord(ctx context.Context, source, object string) {
+// objectDeleted records that the object was deleted through the proxy. The
+// object is gone from the source storage while the destination still holds it
+// until the deletion has been replicated, so it must not be read from there:
+// its migrated record goes and a pending delete takes its place. Dropping the
+// migrated record also allows the object to be copied again should it
+// reappear.
+func (r *router) objectDeleted(ctx context.Context, source, object string) {
 	if !settings.ReadFromDestination.Get() {
 		return
 	}
@@ -196,8 +196,9 @@ func (r *router) dropMigratedRecord(ctx context.Context, source, object string) 
 	if reason != "" {
 		return
 	}
-	if err := r.storageSvc.DelMigratedObj(ctx, migrationID(source, user, bucket, dest), object); err != nil {
-		zerolog.Ctx(ctx).Err(err).Str(log.Object, object).Msg("read from destination: unable to drop migrated object record")
+	id := migrationID(source, user, bucket, dest)
+	if err := r.storageSvc.ObjectDeleted(ctx, id, object); err != nil {
+		zerolog.Ctx(ctx).Err(err).Str(log.Object, object).Msg("read from destination: unable to record the deleted object")
 	}
 }
 
