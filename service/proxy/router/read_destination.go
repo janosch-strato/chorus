@@ -21,8 +21,10 @@
 // slow, the readFromDestination option lets the proxy answer reads of objects
 // that the migration has already copied from the destination storage instead.
 //
-// An object counts as migrated when the worker has recorded its copy, which it
-// does per replication in a set of object names. Everything the proxy wrote
+// While the initial sync runs, an object counts as migrated when the worker has
+// recorded its copy, which it does per replication in a set of object names.
+// Once it is done, everything counts as migrated and the records are dropped by
+// the copy that ends the initial sync, see liveSync(). Everything the proxy wrote
 // afterwards is visible in the object version metadata, so a destination
 // version behind the source version disqualifies the object again. Objects
 // deleted through the proxy have their record removed, see objectDeleted().
@@ -67,6 +69,7 @@ const (
 	skipDestinationBehind = "destination_behind"
 	skipRecordError       = "record_error"
 	skipNotCopied         = "not_copied"
+	skipPendingDelete     = "pending_delete"
 )
 
 // destinationReadRoute tells whether the request may be served by the
@@ -150,9 +153,10 @@ func (r *router) migrationDestination(ctx context.Context, source, user, bucket 
 	return policies.Destinations[0], ""
 }
 
-// objectMigrated returns an empty reason if the object has been copied to the
-// destination and has not been written through the proxy since. Any other
-// reason keeps the read on the source storage.
+// objectMigrated returns an empty reason if the object can be read from the
+// destination: it has been copied there and has not been written or deleted
+// through the proxy since. Any other reason keeps the read on the source
+// storage.
 func (r *router) objectMigrated(ctx context.Context, source, user, bucket, object string, dest entity.ReplicationPolicyDestination) string {
 	objMeta, err := r.versionSvc.GetObj(ctx, dom.Object{Bucket: bucket, Name: object})
 	if err != nil {
@@ -164,7 +168,22 @@ func (r *router) objectMigrated(ctx context.Context, source, user, bucket, objec
 		return skipDestinationBehind
 	}
 
-	migrated, err := r.storageSvc.IsMigratedObj(ctx, migrationID(source, user, bucket, dest), object)
+	id := migrationID(source, user, bucket, dest)
+	if r.liveSync(ctx, id) {
+		// everything the listing found has been copied, so the destination
+		// holds the object unless its deletion is still on its way there
+		pending, err := r.storageSvc.IsPendingDeleteObj(ctx, id, object)
+		if err != nil {
+			zerolog.Ctx(ctx).Err(err).Msg("read from destination: unable to read the pending delete record")
+			return skipRecordError
+		}
+		if pending {
+			return skipPendingDelete
+		}
+		return ""
+	}
+
+	migrated, err := r.storageSvc.IsMigratedObj(ctx, id, object)
 	if err != nil {
 		zerolog.Ctx(ctx).Err(err).Msg("read from destination: unable to read the migrated object record")
 		return skipRecordError
@@ -173,6 +192,20 @@ func (r *router) objectMigrated(ctx context.Context, source, user, bucket, objec
 		return skipNotCopied
 	}
 	return ""
+}
+
+// liveSync reports whether the migration has copied everything its listing
+// found and only replicates what happens since. The copy that ended the
+// initial sync records it and drops the per object records with it, so from
+// then on every object counts as copied and what the destination does not have
+// yet is a deletion or a write in flight, both of which say so elsewhere.
+func (r *router) liveSync(ctx context.Context, id entity.ReplicationStatusID) bool {
+	status, err := r.policySvc.GetReplicationPolicyInfo(ctx, id)
+	if err != nil {
+		zerolog.Ctx(ctx).Err(err).Msg("read from destination: unable to get replication status")
+		return false
+	}
+	return status.LiveSync
 }
 
 // migrationID names the replication the bucket is migrated by.

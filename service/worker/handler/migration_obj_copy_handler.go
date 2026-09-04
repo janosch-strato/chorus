@@ -150,6 +150,9 @@ func (s *svc) HandleMigrationObjCopy(ctx context.Context, t *asynq.Task) (err er
 		if err = s.storageSvc.SetMigratedObj(ctx, replicationID, p.Obj.Name); err != nil {
 			return fmt.Errorf("migration obj copy: unable to record the copied object: %w", err)
 		}
+		if err = s.endInitialSync(ctx, replicationID); err != nil {
+			return err
+		}
 	}
 	logger.Info().
 		Dur("lock_duration", lockDuration).
@@ -159,5 +162,32 @@ func (s *svc) HandleMigrationObjCopy(ctx context.Context, t *asynq.Task) (err er
 		Int64("obj_size", p.Obj.Size).
 		Msg("migration obj copy: done")
 
+	return nil
+}
+
+// endInitialSync ends the initial sync of the migration if this copy was the
+// last one waiting for it. From then on the destination holds everything the
+// listing found, so the proxy reads it from there without asking for the per
+// object records, and the records go.
+//
+// Copies still running are not waited for. A read of one of those objects
+// finds it missing on the destination and falls back to the source, which is
+// what the fallback is for, and there are only as many of them as the worker
+// runs at once.
+func (s *svc) endInitialSync(ctx context.Context, replicationID entity.ReplicationStatusID) error {
+	empty, err := s.queueSvc.QueuedEmpty(ctx, tasks.MigrateObjCopyQueue(replicationID))
+	if err != nil {
+		return fmt.Errorf("migration obj copy: unable to check the copy queue: %w", err)
+	}
+	if !empty {
+		return nil
+	}
+	if err = s.policySvc.LiveSyncStarted(ctx, replicationID); err != nil {
+		return fmt.Errorf("migration obj copy: unable to start live sync: %w", err)
+	}
+	if err = s.storageSvc.DelAllMigratedObjs(ctx, replicationID); err != nil {
+		return fmt.Errorf("migration obj copy: unable to drop the migrated object records: %w", err)
+	}
+	zerolog.Ctx(ctx).Info().Msg("migration obj copy: initial sync done, reading everything from the destination")
 	return nil
 }

@@ -81,6 +81,7 @@ type Service interface {
 	ListReplicationPolicyInfo(ctx context.Context) (map[entity.ReplicationStatusID]entity.ReplicationStatusExtended, error)
 	IsReplicationPolicyExists(ctx context.Context, id entity.ReplicationStatusID) (bool, error)
 	ObjListStarted(ctx context.Context, id entity.ReplicationStatusID) error
+	LiveSyncStarted(ctx context.Context, id entity.ReplicationStatusID) error
 
 	PauseReplication(ctx context.Context, id entity.ReplicationStatusID) error
 	ResumeReplication(ctx context.Context, id entity.ReplicationStatusID) error
@@ -201,6 +202,13 @@ func (r *policySvc) buildQueueStats(ctx context.Context, queues []string) (bool,
 		}
 	}
 	return isPaused, result, nil
+}
+
+func (r *policySvc) LiveSyncStarted(ctx context.Context, id entity.ReplicationStatusID) error {
+	if err := r.replicationStatusStore.SetLiveSync(ctx, id); err != nil {
+		return fmt.Errorf("unable to set live sync: %w", err)
+	}
+	return nil
 }
 
 func (r *policySvc) ObjListStarted(ctx context.Context, id entity.ReplicationStatusID) error {
