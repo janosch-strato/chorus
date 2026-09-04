@@ -622,7 +622,7 @@ func (h *handlers) DeleteUserReplication(ctx context.Context, req *pb.DeleteUser
 			if err != nil {
 				zerolog.Ctx(ctx).Err(err).Msg("unable to delete bucket version metadata")
 			}
-			err = h.storageSvc.CleanLastListedObj(ctx, id.FromStorage, id.ToStorage, id.FromBucket, id.ToBucket)
+			err = h.storageSvc.DelLastListedObj(ctx, id.FromStorage, id.ToStorage, id.FromBucket, id.ToBucket)
 			if err != nil {
 				zerolog.Ctx(ctx).Err(err).Msg("unable to delete bucket obj list metadata")
 			}
@@ -692,7 +692,7 @@ func (h *handlers) DeleteReplication(ctx context.Context, req *pb.ReplicationReq
 		if err != nil {
 			return fmt.Errorf("%w: unable to delete version metadata", err)
 		}
-		err = h.storageSvc.CleanLastListedObj(ctx, req.From, req.To, req.Bucket, req.ToBucket)
+		err = h.storageSvc.DelLastListedObj(ctx, req.From, req.To, req.Bucket, req.ToBucket)
 		if err != nil {
 			return fmt.Errorf("%w: unable to delete list obj metadata", err)
 		}
