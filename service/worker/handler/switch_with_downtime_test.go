@@ -13,7 +13,13 @@ import (
 func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 	worker := &svc{}
 
-	now := time.Now()
+	// A fixed now, half past the hour: the hourly cron of the cases below is
+	// due at the top of one, so a real clock makes them test something else
+	// for the first minute of every hour.
+	now := time.Date(2026, time.January, 2, 10, 30, 0, 0, time.UTC)
+	// a moment later, the way a real clock is past the fixtures it built
+	entity.TimeNow = func() time.Time { return now.Add(time.Second) }
+	t.Cleanup(func() { entity.TimeNow = time.Now })
 	hourAgo := now.Add(-time.Hour)
 	minuteAgo := now.Add(-time.Minute)
 
@@ -93,7 +99,9 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 		t.Run("from "+string(status)+" to retry later", func(t *testing.T) {
 			r := require.New(t)
 
-			nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{}, entity.ReplicationSwitchInfo{
+			nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{
+				ReplicationStatus: &entity.ReplicationStatus{CreatedAt: hourAgo},
+			}, entity.ReplicationSwitchInfo{
 				ReplicationSwitchDowntimeOpts: entity.ReplicationSwitchDowntimeOpts{
 					// run every hour
 					Cron: stringPtr("@hourly"),
