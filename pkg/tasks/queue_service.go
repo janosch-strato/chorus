@@ -22,12 +22,14 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/clyso/chorus/pkg/dom"
 )
 
 type QueueService interface {
 	UnprocessedCount(ctx context.Context, ignoreNotFound bool, queues ...string) (int, error)
+	QueuedEmpty(ctx context.Context, queue string) (bool, error)
 	IsPaused(ctx context.Context, queueName string) (bool, error)
 	Resume(ctx context.Context, queueName string) error
 	Pause(ctx context.Context, queueName string) error
@@ -68,9 +70,34 @@ type QueueStats struct {
 	Latency time.Duration
 }
 
-func NewQueueService(inspector *asynq.Inspector) *queueService {
+// QueuedEmpty reports whether the queue holds no task waiting to run: nothing
+// pending, scheduled or waiting for a retry. Tasks being processed right now
+// are not counted, so a handler can ask whether anything is left after the
+// ones in flight, itself included.
+//
+// It reads the four keys directly rather than through the inspector, whose
+// queue info also samples the memory of the tasks, which costs far more than
+// the question is worth. The key layout is asynq's and does not change without
+// its storage format changing, which Test_queueService_QueuedEmpty pins.
+func (q *queueService) QueuedEmpty(ctx context.Context, queue string) (bool, error) {
+	pending := q.client.LLen(ctx, fmt.Sprintf("asynq:{%s}:pending", queue))
+	scheduled := q.client.ZCard(ctx, fmt.Sprintf("asynq:{%s}:scheduled", queue))
+	retry := q.client.ZCard(ctx, fmt.Sprintf("asynq:{%s}:retry", queue))
+	for _, cmd := range []*redis.IntCmd{pending, scheduled, retry} {
+		if err := cmd.Err(); err != nil {
+			return false, fmt.Errorf("unable to read queue %s: %w", queue, err)
+		}
+		if cmd.Val() != 0 {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func NewQueueService(inspector *asynq.Inspector, client redis.UniversalClient) *queueService {
 	return &queueService{
 		inspector: inspector,
+		client:    client,
 	}
 }
 
@@ -78,6 +105,7 @@ var _ QueueService = (*queueService)(nil)
 
 type queueService struct {
 	inspector *asynq.Inspector
+	client    redis.UniversalClient
 }
 
 func (q *queueService) Stats(ctx context.Context, queueName string) (*QueueStats, error) {

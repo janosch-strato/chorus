@@ -90,8 +90,12 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	taskClient := asynq.NewClient(queueRedis)
 	defer taskClient.Close()
 	inspector := asynq.NewInspector(queueRedis)
+	// a plain client on the queue db, for the cheap queue reads the inspector
+	// has no api for
+	queueClient := util.NewRedis(conf.Redis, conf.Redis.QueueDB)
+	defer queueClient.Close()
 	defer inspector.Close()
-	queueSvc := tasks.NewQueueService(inspector)
+	queueSvc := tasks.NewQueueService(inspector, queueClient)
 	policySvc := policy.NewService(confRedis, queueSvc, nil)
 
 	replSvc := replication.New(taskClient, verSvc, policySvc)
