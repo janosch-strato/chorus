@@ -74,9 +74,17 @@ type Service interface {
 	SetLastListedObj(ctx context.Context, fromStor, toStor, fromBucket, toBucket, object string) error
 	DelLastListedObj(ctx context.Context, fromStor, toStor, fromBucket, toBucket string) error
 
-	// The objects a migration has copied. They exist for the readFromDestination
-	// mode of the proxy, which serves reads of a copied object from the
-	// destination storage while the migration runs.
+	// Objects deleted through the proxy whose deletion the destination has not
+	// replicated yet. They exist for the readFromDestination mode of the
+	// proxy, which reads an object from the destination storage while the
+	// migration runs and must not do so for one that is already deleted.
+	SetPendingDeleteObj(ctx context.Context, id entity.ReplicationStatusID, object string) error
+	IsPendingDeleteObj(ctx context.Context, id entity.ReplicationStatusID, object string) (bool, error)
+	DelPendingDeleteObj(ctx context.Context, id entity.ReplicationStatusID, object string) error
+	DelAllPendingDeleteObjs(ctx context.Context, id entity.ReplicationStatusID) error
+
+	// The objects a migration has copied. They exist for the same mode: the
+	// proxy serves reads of a copied object from the destination storage.
 	SetMigratedObj(ctx context.Context, id entity.ReplicationStatusID, object string) error
 	IsMigratedObj(ctx context.Context, id entity.ReplicationStatusID, object string) (bool, error)
 	DelMigratedObj(ctx context.Context, id entity.ReplicationStatusID, object string) error
@@ -153,6 +161,30 @@ func (s *svc) SetLastListedObj(ctx context.Context, fromStor, toStor, fromBucket
 // that is not in that mode never writes them.
 func migratedObjsKey(id entity.ReplicationStatusID) string {
 	return fmt.Sprintf("s:read-from-destination:%s:%s:%s:%s:%s", id.User, id.FromStorage, id.FromBucket, id.ToStorage, id.ToBucket)
+}
+
+// pendingDeleteObjsKey names the set of objects that were deleted through the
+// proxy and are still on the destination, one set per replication. Only the
+// readFromDestination mode writes and reads it. It holds what is in flight,
+// not what has been done, so it stays small.
+func pendingDeleteObjsKey(id entity.ReplicationStatusID) string {
+	return fmt.Sprintf("s:pending-delete:%s:%s:%s:%s:%s", id.User, id.FromStorage, id.FromBucket, id.ToStorage, id.ToBucket)
+}
+
+func (s *svc) SetPendingDeleteObj(ctx context.Context, id entity.ReplicationStatusID, object string) error {
+	return s.client.SAdd(ctx, pendingDeleteObjsKey(id), object).Err()
+}
+
+func (s *svc) IsPendingDeleteObj(ctx context.Context, id entity.ReplicationStatusID, object string) (bool, error) {
+	return s.client.SIsMember(ctx, pendingDeleteObjsKey(id), object).Result()
+}
+
+func (s *svc) DelPendingDeleteObj(ctx context.Context, id entity.ReplicationStatusID, object string) error {
+	return s.client.SRem(ctx, pendingDeleteObjsKey(id), object).Err()
+}
+
+func (s *svc) DelAllPendingDeleteObjs(ctx context.Context, id entity.ReplicationStatusID) error {
+	return s.client.Del(ctx, pendingDeleteObjsKey(id)).Err()
 }
 
 func (s *svc) SetMigratedObj(ctx context.Context, id entity.ReplicationStatusID, object string) error {

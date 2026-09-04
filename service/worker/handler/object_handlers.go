@@ -27,6 +27,7 @@ import (
 	mclient "github.com/minio/minio-go/v7"
 	"github.com/rs/zerolog"
 
+	xctx "github.com/clyso/chorus/pkg/ctx"
 	"github.com/clyso/chorus/pkg/dom"
 	"github.com/clyso/chorus/pkg/entity"
 	"github.com/clyso/chorus/pkg/log"
@@ -111,6 +112,20 @@ func (s *svc) objectDelete(ctx context.Context, p tasks.ObjectSyncPayload) (err 
 	if err != nil {
 		return err
 	}
+	// The proxy waits for this deletion to reach the destination before it
+	// reads the object from there again, so the record of it goes once the
+	// destination has seen it, whether we deleted it or found the object back
+	// in the source. Only the readFromDestination mode keeps such records.
+	defer func() {
+		if err != nil || !s.conf.ReadFromDestination {
+			return
+		}
+		replicationID := entity.NewReplicationStatusID(xctx.GetUser(ctx), p.FromStorage, p.Object.Bucket, p.ToStorage, p.ToBucket)
+		if delErr := s.storageSvc.DelPendingDeleteObj(ctx, replicationID, p.Object.Name); delErr != nil {
+			zerolog.Ctx(ctx).Err(delErr).Msg("object delete: unable to drop the pending delete record")
+		}
+	}()
+
 	_, err = fromClient.S3().StatObject(ctx, p.Object.Bucket, p.Object.Name, mclient.StatObjectOptions{})
 	if err == nil {
 		zerolog.Ctx(ctx).Warn().Msg("skip obj delete: obj still exists in source storage")

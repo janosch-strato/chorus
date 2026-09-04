@@ -154,15 +154,15 @@ func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks
 	}
 	// A deleted object is gone from the source storage, but the migration
 	// destination keeps it until the deletion has been replicated, so it must
-	// no longer count as migrated.
+	// not be read from there, see objectDeleted().
 	if err == nil && !isApiErr {
 		switch method {
 		case s3.DeleteObject:
-			r.dropMigratedRecord(ctx, storage, object)
+			r.objectDeleted(ctx, storage, object)
 		case s3.DeleteObjects:
 			for _, t := range taskList {
 				if payload, ok := t.(*tasks.ObjectSyncPayload); ok && payload.Deleted {
-					r.dropMigratedRecord(ctx, storage, payload.Object.Name)
+					r.objectDeleted(ctx, storage, payload.Object.Name)
 				}
 			}
 		}
