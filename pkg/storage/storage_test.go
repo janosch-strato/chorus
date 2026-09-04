@@ -19,11 +19,13 @@ package storage
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/clyso/chorus/pkg/entity"
 	"github.com/clyso/chorus/pkg/tasks"
 	"github.com/clyso/chorus/pkg/testutil"
 )
@@ -165,4 +167,40 @@ func Test_svc_StoreUploadID(t *testing.T) {
 	err = storage.DeleteUploadID(ctx, "missing", "keys", "valid", "args")
 	r.NoError(err)
 
+}
+
+// The two sets of a replication are written in one step when an object is
+// deleted, which redis only allows for keys of one slot.
+func Test_ObjectDeleted(t *testing.T) {
+	r := require.New(t)
+	ctx := context.Background()
+	storage := New(testutil.SetupRedis(t))
+
+	id := entity.NewReplicationStatusID("user", "src", "buck", "dst", "dst-buck")
+	slot := func(key string) string {
+		open := strings.Index(key, "{")
+		return key[open : strings.Index(key, "}")+1]
+	}
+	r.Equal(slot(migratedObjsKey(id)), slot(pendingDeleteObjsKey(id)),
+		"the hash tag is what puts the two on one node")
+
+	r.NoError(storage.SetMigratedObj(ctx, id, "copied"))
+	r.NoError(storage.SetMigratedObj(ctx, id, "deleted"))
+
+	r.NoError(storage.ObjectDeleted(ctx, id, "deleted"))
+	migrated, err := storage.IsMigratedObj(ctx, id, "deleted")
+	r.NoError(err)
+	r.False(migrated, "a deleted object stops counting as copied")
+	pending, err := storage.IsPendingDeleteObj(ctx, id, "deleted")
+	r.NoError(err)
+	r.True(pending, "and its deletion is on its way to the destination")
+
+	migrated, err = storage.IsMigratedObj(ctx, id, "copied")
+	r.NoError(err)
+	r.True(migrated, "the other objects are untouched")
+
+	r.NoError(storage.DelPendingDeleteObj(ctx, id, "deleted"))
+	pending, err = storage.IsPendingDeleteObj(ctx, id, "deleted")
+	r.NoError(err)
+	r.False(pending, "the destination has seen it")
 }

@@ -105,16 +105,21 @@ func Test_router_destinationReadRoute(t *testing.T) {
 		r.Equal(skipNotCopied, reason)
 	})
 
-	t.Run("record of a deleted object is dropped", func(t *testing.T) {
+	t.Run("a deleted object is dropped and its deletion noted", func(t *testing.T) {
 		r := require.New(t)
 		object := "deleted"
 		setMigrated(t, storageSvc, object)
 
 		ctx := xctx.SetBucket(xctx.SetUser(t.Context(), testUser), testBucket)
-		rt.dropMigratedRecord(ctx, testSource, object)
+		rt.objectDeleted(ctx, testSource, object)
 
 		_, _, reason := rt.destinationReadDecision(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
 		r.Equal(skipNotCopied, reason)
+
+		id := entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket)
+		pending, err := storageSvc.IsPendingDeleteObj(ctx, id, object)
+		r.NoError(err)
+		r.True(pending, "the destination holds it until the deletion is replicated")
 	})
 
 	t.Run("listings are read from source", func(t *testing.T) {

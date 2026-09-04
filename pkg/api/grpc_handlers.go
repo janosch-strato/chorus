@@ -626,6 +626,14 @@ func (h *handlers) DeleteUserReplication(ctx context.Context, req *pb.DeleteUser
 			if err != nil {
 				zerolog.Ctx(ctx).Err(err).Msg("unable to delete bucket obj list metadata")
 			}
+			err = h.storageSvc.DelAllMigratedObjs(ctx, id)
+			if err != nil {
+				zerolog.Ctx(ctx).Err(err).Msg("unable to delete migrated object records")
+			}
+			err = h.storageSvc.DelAllPendingDeleteObjs(ctx, id)
+			if err != nil {
+				zerolog.Ctx(ctx).Err(err).Msg("unable to delete pending delete records")
+			}
 			err = h.notificationSvc.DeleteBucketNotification(ctx, req.From, req.User, id.FromBucket)
 			if err != nil {
 				zerolog.Ctx(ctx).Err(err).Msg("unable to delete agent bucket notification")
@@ -699,6 +707,10 @@ func (h *handlers) DeleteReplication(ctx context.Context, req *pb.ReplicationReq
 		err = h.storageSvc.DelAllMigratedObjs(ctx, replicationID)
 		if err != nil {
 			return fmt.Errorf("%w: unable to delete migrated object records", err)
+		}
+		err = h.storageSvc.DelAllPendingDeleteObjs(ctx, replicationID)
+		if err != nil {
+			return fmt.Errorf("%w: unable to delete pending delete records", err)
 		}
 		err = h.notificationSvc.DeleteBucketNotification(ctx, req.From, req.User, req.Bucket)
 		if err != nil {
