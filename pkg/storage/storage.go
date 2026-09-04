@@ -27,7 +27,6 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/clyso/chorus/pkg/dom"
-	"github.com/clyso/chorus/pkg/tasks"
 )
 
 const (
@@ -35,13 +34,6 @@ const (
 )
 
 var (
-	luaDeleteKeysByPrefix = redis.NewScript(`local keys = redis.call('keys', ARGV[1])
-if #keys >0 then
-	return redis.call('DEL', unpack(keys))
-else
-	return 0
-end`)
-
 	luaAddToConsistencySet = redis.NewScript(`redis.call("SADD", KEYS[1], ARGV[1])
 local count = redis.call("SCARD", KEYS[1])
 if count == tonumber(ARGV[2]) then
@@ -76,10 +68,10 @@ type ConsistencyCheckResultPage struct {
 }
 
 type Service interface {
-	GetLastListedObj(ctx context.Context, task tasks.MigrateBucketListObjectsPayload) (string, error)
-	SetLastListedObj(ctx context.Context, task tasks.MigrateBucketListObjectsPayload, val string) error
-	DelLastListedObj(ctx context.Context, task tasks.MigrateBucketListObjectsPayload) error
-	CleanLastListedObj(ctx context.Context, fromStor, toStor, fromBucket string, toBucket string) error
+	// The listing cursor of a replication, one per replication.
+	GetLastListedObj(ctx context.Context, fromStor, toStor, fromBucket, toBucket string) (string, error)
+	SetLastListedObj(ctx context.Context, fromStor, toStor, fromBucket, toBucket, object string) error
+	DelLastListedObj(ctx context.Context, fromStor, toStor, fromBucket, toBucket string) error
 
 	StoreUploadID(ctx context.Context, user, bucket, object, uploadID string, ttl time.Duration) error
 	DeleteUploadID(ctx context.Context, user, bucket, object, uploadID string) error
@@ -123,28 +115,18 @@ type svc struct {
 	client redis.UniversalClient
 }
 
-func (s *svc) CleanLastListedObj(ctx context.Context, fromStor string, toStor string, fromBucket string, toBucket string) error {
-	key := fmt.Sprintf("s:%s:%s:%s:%s", fromStor, toStor, fromBucket, toBucket)
-	if err := s.client.Del(ctx, key).Err(); err != nil {
-		return err
-	}
-	prefix := key + ":*"
-	return luaDeleteKeysByPrefix.Run(ctx, s.client, []string{}, prefix).Err()
+// lastListedObjKey names the listing cursor of a replication. One listing per
+// replication means one cursor.
+func lastListedObjKey(fromStor, toStor, fromBucket, toBucket string) string {
+	return fmt.Sprintf("s:%s:%s:%s:%s", fromStor, toStor, fromBucket, toBucket)
 }
 
-func (s *svc) DelLastListedObj(ctx context.Context, task tasks.MigrateBucketListObjectsPayload) error {
-	key := fmt.Sprintf("s:%s:%s:%s:%s", task.FromStorage, task.ToStorage, task.Bucket, task.ToBucket)
-	if task.Prefix != "" {
-		key += ":" + task.Prefix
-	}
-	return s.client.Del(ctx, key).Err()
+func (s *svc) DelLastListedObj(ctx context.Context, fromStor, toStor, fromBucket, toBucket string) error {
+	return s.client.Del(ctx, lastListedObjKey(fromStor, toStor, fromBucket, toBucket)).Err()
 }
 
-func (s *svc) GetLastListedObj(ctx context.Context, task tasks.MigrateBucketListObjectsPayload) (string, error) {
-	key := fmt.Sprintf("s:%s:%s:%s:%s", task.FromStorage, task.ToStorage, task.Bucket, task.ToBucket)
-	if task.Prefix != "" {
-		key += ":" + task.Prefix
-	}
+func (s *svc) GetLastListedObj(ctx context.Context, fromStor, toStor, fromBucket, toBucket string) (string, error) {
+	key := lastListedObjKey(fromStor, toStor, fromBucket, toBucket)
 	val, err := s.client.Get(ctx, key).Result()
 	if errors.Is(err, redis.Nil) {
 		return "", nil
@@ -152,12 +134,9 @@ func (s *svc) GetLastListedObj(ctx context.Context, task tasks.MigrateBucketList
 	return val, err
 }
 
-func (s *svc) SetLastListedObj(ctx context.Context, task tasks.MigrateBucketListObjectsPayload, val string) error {
-	key := fmt.Sprintf("s:%s:%s:%s:%s", task.FromStorage, task.ToStorage, task.Bucket, task.ToBucket)
-	if task.Prefix != "" {
-		key += ":" + task.Prefix
-	}
-	return s.client.Set(ctx, key, val, lastListedObjTTL).Err()
+func (s *svc) SetLastListedObj(ctx context.Context, fromStor, toStor, fromBucket, toBucket, object string) error {
+	key := lastListedObjKey(fromStor, toStor, fromBucket, toBucket)
+	return s.client.Set(ctx, key, object, lastListedObjTTL).Err()
 }
 
 func (s *svc) StoreUploadID(ctx context.Context, user, bucket, object, uploadID string, ttl time.Duration) error {

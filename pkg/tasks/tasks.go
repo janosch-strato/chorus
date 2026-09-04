@@ -98,12 +98,8 @@ const MigrateObjCopyRetention = 100 * 365 * 24 * time.Hour
 
 // MigrateBucketListObjectsTaskID returns the task id of the listing task for a
 // bucket and prefix.
-func MigrateBucketListObjectsTaskID(fromStorage, toStorage, bucket, toBucket, prefix string) string {
-	id := fmt.Sprintf("mgr:lo:%s:%s:%s:%s", fromStorage, toStorage, bucket, toBucket)
-	if prefix != "" {
-		id += ":" + prefix
-	}
-	return id
+func MigrateBucketListObjectsTaskID(fromStorage, toStorage, bucket, toBucket string) string {
+	return fmt.Sprintf("mgr:lo:%s:%s:%s:%s", fromStorage, toStorage, bucket, toBucket)
 }
 
 // MigrateObjCopyQueue returns the name of the queue holding the object copy
@@ -248,8 +244,11 @@ type MigrateVersionedObjectPayload struct {
 type MigrateBucketListObjectsPayload struct {
 	Sync
 	Bucket    string
-	Prefix    string
 	Versioned bool
+	// Parked counts how often this listing has stopped for a full copy queue.
+	// It is what makes the id of a continuation differ from the id of the task
+	// that queues it, see the worker handler.
+	Parked int
 }
 
 type MigrateObjCopyPayload struct {
@@ -361,7 +360,7 @@ func NewReplicationTask[T ReplicationTask](ctx context.Context, replicationID en
 		optionList = []asynq.Option{asynq.Queue(queue)}
 		taskType = TypeObjectSyncACL
 	case MigrateBucketListObjectsPayload:
-		id := MigrateBucketListObjectsTaskID(p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket, p.Prefix)
+		id := MigrateBucketListObjectsTaskID(p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket)
 		queue := replicationQueueName(QueueMigrateListObjectsPrefix, replicationID)
 		optionList = []asynq.Option{asynq.Queue(queue), asynq.TaskID(id)}
 		taskType = TypeMigrateBucketListObjects
