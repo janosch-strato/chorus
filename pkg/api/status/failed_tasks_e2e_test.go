@@ -57,7 +57,7 @@ func setupE2E(t *testing.T) *e2eEnv {
 		asynqClient.Close()
 	})
 
-	queueSvc := tasks.NewQueueService(inspector)
+	queueSvc := tasks.NewQueueService(inspector, redisClient)
 	policySvc := policy.NewService(redisClient, queueSvc, nil)
 
 	replID := entity.ReplicationStatusID{

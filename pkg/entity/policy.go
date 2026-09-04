@@ -76,6 +76,11 @@ type ReplicationStatus struct {
 	ArchivedAt *time.Time `redis:"archived_at,omitempty"`
 
 	ListingDone bool `redis:"listing_done"`
+	// LiveSync is set by the copy that finishes the initial sync: everything
+	// the listing found is on the destination from then on, and only what
+	// happens since is replicated. Unlike InitDone() it is a fact of the
+	// migration rather than the state of its queues at a moment.
+	LiveSync bool `redis:"live_sync"`
 
 	HasSwitch bool `redis:"-"`
 }

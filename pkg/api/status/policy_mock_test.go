@@ -137,6 +137,10 @@ func (m *policyServiceMock) DropReplicationRecords(context.Context, entity.Repli
 	panic("not implemented")
 }
 
+func (m *policyServiceMock) LiveSyncStarted(context.Context, entity.ReplicationStatusID) error {
+	panic("not implemented")
+}
+
 func (m *policyServiceMock) DeleteBucketReplicationsByUser(context.Context, string, string, string) ([]entity.ReplicationStatusID, error) {
 	panic("not implemented")
 }

@@ -210,6 +210,14 @@ func (r *ReplicationStatusStore) SetListingDone(ctx context.Context, id entity.R
 	return r.SetListingDoneOp(ctx, id).Get()
 }
 
+func (r *ReplicationStatusStore) SetLiveSyncOp(ctx context.Context, id entity.ReplicationStatusID) OperationStatus {
+	return r.SetFieldIfExistsOp(ctx, id, "live_sync", true)
+}
+
+func (r *ReplicationStatusStore) SetLiveSync(ctx context.Context, id entity.ReplicationStatusID) error {
+	return r.SetLiveSyncOp(ctx, id).Get()
+}
+
 func (r *ReplicationStatusStore) SetCreatedAtOp(ctx context.Context, id entity.ReplicationStatusID, value time.Time) OperationStatus {
 	return r.SetFieldIfExistsOp(ctx, id, "created_at", value.UTC())
 }
