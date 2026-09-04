@@ -610,7 +610,7 @@ func Test_policySvc_SetDowntimeReplicationSwitch(t *testing.T) {
 			r.NoError(err)
 			queuesMock.InitReplicationInProgress(replID)
 			// finish init replication
-			r.NoError(svc.ObjListStarted(ctx, replID))
+			r.NoError(svc.ListingDone(ctx, replID))
 			queuesMock.InitReplicationDone(replID)
 			// r.NoError(svc.IncReplInitObjListed(ctx, replID, 0, time.Now()))
 			// r.NoError(svc.IncReplInitObjDone(ctx, replID, 0, time.Now()))
@@ -748,7 +748,7 @@ func Test_policySvc_AddZeroDowntimeSwitch(t *testing.T) {
 		r.Error(err, "replication not done")
 
 		// finish init replication
-		r.NoError(svc.ObjListStarted(ctx, replID))
+		r.NoError(svc.ListingDone(ctx, replID))
 		queuesMock.InitReplicationDone(replID)
 
 		err = svc.AddZeroDowntimeReplicationSwitch(ctx, replID, validSwitch)
@@ -775,7 +775,7 @@ func Test_policySvc_AddZeroDowntimeSwitch(t *testing.T) {
 		r.NoError(err)
 		queuesMock.InitReplicationInProgress(replID)
 		// finish init replication
-		r.NoError(svc.ObjListStarted(ctx, replID))
+		r.NoError(svc.ListingDone(ctx, replID))
 		queuesMock.InitReplicationDone(replID)
 
 		// create switch
@@ -814,7 +814,7 @@ func Test_policySvc_AddZeroDowntimeSwitch(t *testing.T) {
 		r.NoError(err)
 		r.True(repl.IsArchived)
 		r.NotNil(repl.ArchivedAt)
-		r.True(repl.ListingStarted)
+		r.True(repl.ListingDone)
 		//delete metadata
 		r.NoError(svc.DropReplicationRecords(ctx, replID))
 		_, err = svc.GetReplicationPolicyInfo(ctx, replID)
@@ -845,7 +845,7 @@ func Test_policySvc_AddZeroDowntimeSwitch(t *testing.T) {
 		r.NoError(err)
 		queuesMock.InitReplicationInProgress(replID)
 		// finish init replication
-		r.NoError(svc.ObjListStarted(ctx, replID))
+		r.NoError(svc.ListingDone(ctx, replID))
 		queuesMock.InitReplicationDone(replID)
 
 		// create switch
@@ -1341,7 +1341,7 @@ func Test_policySvc_ListReplicationSwitchInfo(t *testing.T) {
 	r.NoError(err)
 	queuesMock.InitReplicationInProgress(replIDZero)
 	// finish init replication
-	r.NoError(svc.ObjListStarted(ctx, replIDZero))
+	r.NoError(svc.ListingDone(ctx, replIDZero))
 	queuesMock.InitReplicationDone(replIDZero)
 	// create switch
 	err = svc.AddZeroDowntimeReplicationSwitch(ctx, replIDZero, validSwitchZero)
