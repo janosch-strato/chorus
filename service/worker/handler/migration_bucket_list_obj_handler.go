@@ -21,8 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/crc32"
-	"strings"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -41,17 +39,10 @@ import (
 
 const (
 	// At listing speed auto the listing stops while this many copy tasks are
-	// queued, and continues listingRecheckDelay later. A fixed depth throttles
+	// queued and continues listingRecheckDelay later. A fixed depth throttles
 	// the listing to the speed of the copies by itself: it only ever refills
-	// what the copies took out.
-	//
-	// Both together bound the copy rate the listing can keep up with, at
-	// listingQueueLimit / listingRecheckDelay, here 2000 objects per second,
-	// which is an order of magnitude above what a migration has reached so
-	// far. Buying that headroom with a deeper queue rather than with a shorter
-	// delay keeps the polling of a parked listing rare: the queued tasks cost
-	// about 1.6 KB of redis each, so the depth is worth little more than the
-	// memory it holds.
+	// what the copies took out. The two together bound the copy rate the
+	// listing can keep up with, at listingQueueLimit / listingRecheckDelay.
 	listingQueueLimit   = 20000
 	listingCheckEvery   = 1000
 	listingRecheckDelay = 10 * time.Second
@@ -84,54 +75,42 @@ func (s *svc) HandleMigrationBucketListObj(ctx context.Context, t *asynq.Task) e
 		return fmt.Errorf("migration bucket list obj: unable to get %q s3 client: %w: %w", p.FromStorage, err, asynq.SkipRetry)
 	}
 
-	lastObjName, err := s.storageSvc.GetLastListedObj(ctx, p)
+	lastObjName, err := s.storageSvc.GetLastListedObj(ctx, p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket)
 	if err != nil {
 		return err
 	}
 
+	// Nothing to list while the copies are behind. Checked before the storage
+	// is asked for anything, so a listing that comes back to a queue that is
+	// still full costs one lookup.
 	copyQueue := tasks.MigrateObjCopyQueue(replicationID)
-	objects := fromClient.S3().ListObjects(ctx, p.Bucket, mclient.ListObjectsOptions{StartAfter: lastObjName, Prefix: p.Prefix})
-	objectsNum := 0
+	if queued, park := s.listingMustPark(ctx, copyQueue, logger); park {
+		return s.parkListing(ctx, replicationID, p, queued, logger)
+	}
+
+	// One listing for the whole bucket. A bucket has no directories to walk
+	// into: what looks like one is an object whose name ends in a slash, and
+	// it is copied like any other.
+	objects := fromClient.S3().ListObjects(ctx, p.Bucket, mclient.ListObjectsOptions{
+		StartAfter: lastObjName,
+		Recursive:  true,
+	})
 	listed := 0
 	for object := range objects {
-		// Give the copies room to catch up instead of queueing millions of
-		// objects they cannot get to for days. The count covers retried tasks
-		// too, so a listing also stops when the copies are failing. The
-		// listing resumes from the stored cursor, so it can stop anywhere.
+		// The count covers retried tasks too, so a listing also stops when the
+		// copies are failing. It resumes from the stored cursor, so it can
+		// stop anywhere.
 		listed++
-		if listed%listingCheckEvery == 0 && switches.ListingSpeed() == switches.ListingAuto {
-			queued, err := s.queueSvc.UnprocessedCount(ctx, true, copyQueue)
-			if err != nil {
-				logger.Err(err).Msg("migration bucket list obj: unable to check the copy queue")
-			} else if queued >= listingQueueLimit {
-				return s.rescheduleListing(ctx, replicationID, p, queued, logger)
+		if listed%listingCheckEvery == 0 {
+			if queued, park := s.listingMustPark(ctx, copyQueue, logger); park {
+				return s.parkListing(ctx, replicationID, p, queued, logger)
 			}
 		}
 		if object.Err != nil {
 			return fmt.Errorf("migration bucket list obj: list objects error %w", object.Err)
 		}
-		objectsNum++
-		isDir := object.Size == 0 && strings.HasSuffix(object.Key, "/")
-		logger.Debug().Str(log.Object, object.Key).Str("obj_version_id", object.VersionID).Bool("is_dir", isDir).Msg("migration bucket list obj: start processing object from the list")
-		if isDir {
-			subP := p
-			subP.Prefix = object.Key
-			subTask, err := tasks.NewReplicationTask(ctx, replicationID, subP)
-			if err != nil {
-				return fmt.Errorf("migration bucket list obj: unable to create list obj sub task: %w", err)
-			}
-			_, err = s.taskClient.EnqueueContext(ctx, subTask)
-			if err != nil && !errors.Is(err, asynq.ErrDuplicateTask) && !errors.Is(err, asynq.ErrTaskIDConflict) {
-				return fmt.Errorf("migration bucket list obj: unable to enqueue list obj sub task: %w", err)
-			} else if err != nil {
-				logger.Info().Interface("enqueue_task_payload", subP).Msg("cannot enqueue task with duplicate id")
-			}
-			err = s.storageSvc.SetLastListedObj(ctx, p, object.Key)
-			if err != nil {
-				return fmt.Errorf("migration bucket list obj: unable to update last obj meta: %w", err)
-			}
-			continue
-		}
+		logger.Debug().Str(log.Object, object.Key).Str("obj_version_id", object.VersionID).
+			Msg("migration bucket list obj: start processing object from the list")
 		p.Sync.InitDate()
 
 		var task *asynq.Task
@@ -141,7 +120,6 @@ func (s *svc) HandleMigrationBucketListObj(ctx context.Context, t *asynq.Task) e
 				Bucket: p.Bucket,
 				Prefix: object.Key,
 			})
-
 			if err != nil {
 				return fmt.Errorf("unable to create list object versions task: %w", err)
 			}
@@ -161,80 +139,62 @@ func (s *svc) HandleMigrationBucketListObj(ctx context.Context, t *asynq.Task) e
 				return fmt.Errorf("migration bucket list obj: unable to create copy obj task: %w", err)
 			}
 		}
-		_, err = s.taskClient.EnqueueContext(ctx, task)
-		if err != nil {
-			if errors.Is(err, asynq.ErrDuplicateTask) || errors.Is(err, asynq.ErrTaskIDConflict) {
-				logger.Info().Msg("cannot enqueue task with duplicate id")
-				continue
+		if _, err = s.taskClient.EnqueueContext(ctx, task); err != nil {
+			if !errors.Is(err, asynq.ErrDuplicateTask) && !errors.Is(err, asynq.ErrTaskIDConflict) {
+				return fmt.Errorf("migration bucket list obj: unable to enqueue copy obj task: %w", err)
 			}
-			return fmt.Errorf("migration bucket list obj: unable to enqueue copy obj task: %w", err)
+			logger.Info().Msg("cannot enqueue task with duplicate id")
 		}
-		err = s.storageSvc.SetLastListedObj(ctx, p, object.Key)
-		if err != nil {
+		// the cursor moves for a duplicate as well, or a listing resumed into
+		// objects it has already queued would not get past them
+		if err = s.storageSvc.SetLastListedObj(ctx, p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket, object.Key); err != nil {
 			return fmt.Errorf("migration bucket list obj: unable to update last obj meta: %w", err)
 		}
 	}
+	_ = s.storageSvc.DelLastListedObj(ctx, p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket)
 
-	if lastObjName == "" && objectsNum == 0 && p.Prefix != "" {
-		p.Sync.InitDate()
-		// copy empty dir object
-		task, err := tasks.NewReplicationTask(ctx, replicationID, tasks.MigrateObjCopyPayload{
-			Sync:   p.Sync,
-			Bucket: p.Bucket,
-			Obj: tasks.ObjPayload{
-				Name: p.Prefix,
-			},
-		})
-		if err != nil {
-			return fmt.Errorf("migration bucket list obj: unable to create copy obj task: %w", err)
-		}
-		_, err = s.taskClient.EnqueueContext(ctx, task)
-
-		switch {
-		case errors.Is(err, asynq.ErrDuplicateTask) || errors.Is(err, asynq.ErrTaskIDConflict):
-			logger.Info().Msg("cannot enqueue task with duplicate id")
-		case err != nil:
-			return fmt.Errorf("migration bucket list obj: unable to enqueue copy obj task: %w", err)
-		}
-	}
-	_ = s.storageSvc.DelLastListedObj(ctx, p)
-
-	if p.Prefix == "" {
-		err = s.policySvc.ObjListStarted(ctx, replicationID)
-		if err != nil {
-			logger.Err(err).Msg("migration bucket list obj: unable to set ObjListStarted")
-		}
+	if err = s.policySvc.ObjListStarted(ctx, replicationID); err != nil {
+		logger.Err(err).Msg("migration bucket list obj: unable to set ObjListStarted")
 	}
 
 	logger.Info().Msg("migration bucket list obj: done")
 	return nil
 }
 
-// rescheduleListing stops the current listing task and queues its continuation
-// after listingRecheckDelay. The listing resumes from the cursor stored per
-// object, so the only state needed is the task itself. The task id carries the
-// cursor: the id of the running task is still taken, and a continuation from
-// the same position stays deduplicated.
-func (s *svc) rescheduleListing(ctx context.Context, replicationID entity.ReplicationStatusID,
+// listingMustPark reports the depth of the copy queue and whether the listing
+// has to stop for it.
+func (s *svc) listingMustPark(ctx context.Context, copyQueue string, logger *zerolog.Logger) (int, bool) {
+	if switches.ListingSpeed() != switches.ListingAuto {
+		return 0, false
+	}
+	queued, err := s.queueSvc.UnprocessedCount(ctx, true, copyQueue)
+	if err != nil {
+		logger.Err(err).Msg("migration bucket list obj: unable to check the copy queue")
+		return 0, false
+	}
+	return queued, queued >= listingQueueLimit
+}
+
+// parkListing stops the listing and queues its continuation listingRecheckDelay
+// later. It resumes from the stored cursor, so the task is the only state the
+// pause needs.
+//
+// The continuation carries the number of stops it took to get here, and its id
+// with it. Naming it after the cursor instead would name the running task
+// whenever the listing parks without having listed anything, and asynq refuses
+// that id as a duplicate of a task that is still there.
+func (s *svc) parkListing(ctx context.Context, replicationID entity.ReplicationStatusID,
 	p tasks.MigrateBucketListObjectsPayload, queued int, logger *zerolog.Logger,
 ) error {
-	cursor, err := s.storageSvc.GetLastListedObj(ctx, p)
-	if err != nil {
-		return fmt.Errorf("migration bucket list obj: unable to get listing cursor: %w", err)
-	}
-	id := fmt.Sprintf("%s:%08x", tasks.MigrateBucketListObjectsTaskID(p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket, p.Prefix),
-		crc32.ChecksumIEEE([]byte(cursor)))
+	p.Parked++
+	id := fmt.Sprintf("%s:%d", tasks.MigrateBucketListObjectsTaskID(p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket), p.Parked)
 	task, err := tasks.NewReplicationTask(ctx, replicationID, p, asynq.TaskID(id), asynq.ProcessIn(listingRecheckDelay))
 	if err != nil {
 		return fmt.Errorf("migration bucket list obj: unable to create continuation task: %w", err)
 	}
-	logger.Info().Int("queued", queued).Str("cursor", cursor).
+	logger.Info().Int("queued", queued).Int("parked", p.Parked).
 		Msg("migration bucket list obj: copy queue is full, pausing the listing")
 	if _, err = s.taskClient.EnqueueContext(ctx, task); err != nil {
-		if errors.Is(err, asynq.ErrDuplicateTask) || errors.Is(err, asynq.ErrTaskIDConflict) {
-			// a continuation from this position is already queued
-			return nil
-		}
 		return fmt.Errorf("migration bucket list obj: unable to enqueue continuation task: %w", err)
 	}
 	return nil

@@ -109,7 +109,6 @@ func (s *svc) HandleBucketCreate(ctx context.Context, t *asynq.Task) (err error)
 			ToBucket:    p.ToBucket,
 		},
 		Bucket:    p.Bucket,
-		Prefix:    "",
 		Versioned: shouldListVersions,
 	})
 	if err != nil {

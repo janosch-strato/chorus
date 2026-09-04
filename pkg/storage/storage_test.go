@@ -47,71 +47,44 @@ func Test_svc_GetLastListedObj(t *testing.T) {
 		ToStorage:   "asdf",
 	}
 	b1, b2 := "b1", "b2"
-	p1, p2 := "", "pref/"
 
 	stors := []tasks.Sync{s1, s2, s3}
 	bucks := []string{b1, b2}
-	prefs := []string{p1, p2}
 
 	for _, stor := range stors {
 		for _, buck := range bucks {
-			for _, pref := range prefs {
-				res, err := storage.GetLastListedObj(ctx, tasks.MigrateBucketListObjectsPayload{
-					Sync:   stor,
-					Bucket: buck,
-					Prefix: pref,
-				})
-				r.NoError(err)
-				r.Empty(res)
-			}
+			res, err := storage.GetLastListedObj(ctx, stor.FromStorage, stor.ToStorage, buck, stor.ToBucket)
+			r.NoError(err)
+			r.Empty(res)
 		}
 	}
 
 	for i, stor := range stors {
 		for j, buck := range bucks {
-			for k, pref := range prefs {
-				err := storage.SetLastListedObj(ctx, tasks.MigrateBucketListObjectsPayload{
-					Sync:   stor,
-					Bucket: buck,
-					Prefix: pref,
-				}, fmt.Sprintf("%d-%d-%d", i, j, k))
-				r.NoError(err)
-			}
+			err := storage.SetLastListedObj(ctx, stor.FromStorage, stor.ToStorage, buck, stor.ToBucket, fmt.Sprintf("%d-%d", i, j))
+			r.NoError(err)
 		}
 	}
 
 	for storIdx, stor := range stors {
 		for buckIdx, buck := range bucks {
-			for prefIdx, pref := range prefs {
-				res, err := storage.GetLastListedObj(ctx, tasks.MigrateBucketListObjectsPayload{
-					Sync:   stor,
-					Bucket: buck,
-					Prefix: pref,
-				})
-				r.NoError(err)
-				r.EqualValues(fmt.Sprintf("%d-%d-%d", storIdx, buckIdx, prefIdx), res)
-			}
+			res, err := storage.GetLastListedObj(ctx, stor.FromStorage, stor.ToStorage, buck, stor.ToBucket)
+			r.NoError(err)
+			r.EqualValues(fmt.Sprintf("%d-%d", storIdx, buckIdx), res)
 		}
 	}
-	r.NoError(storage.CleanLastListedObj(ctx, s1.FromStorage, s1.ToStorage, b1, ""))
+	r.NoError(storage.DelLastListedObj(ctx, s1.FromStorage, s1.ToStorage, b1, ""))
 	for storIdx, stor := range stors {
 		for buckIdx, buck := range bucks {
-			for prefIdx, pref := range prefs {
-				res, err := storage.GetLastListedObj(ctx, tasks.MigrateBucketListObjectsPayload{
-					Sync:   stor,
-					Bucket: buck,
-					Prefix: pref,
-				})
-				r.NoError(err)
-				if buck == b1 && stor.ToStorage == s1.ToStorage && stor.FromStorage == s1.FromStorage {
-					r.Empty(res)
-					break
-				}
-				r.EqualValues(fmt.Sprintf("%d-%d-%d", storIdx, buckIdx, prefIdx), res)
+			res, err := storage.GetLastListedObj(ctx, stor.FromStorage, stor.ToStorage, buck, stor.ToBucket)
+			r.NoError(err)
+			if buck == b1 && stor.ToStorage == s1.ToStorage && stor.FromStorage == s1.FromStorage {
+				r.Empty(res, "the cursor of that replication is gone")
+				continue
 			}
+			r.EqualValues(fmt.Sprintf("%d-%d", storIdx, buckIdx), res)
 		}
 	}
-
 }
 
 func Test_GetLastListedObjWithCustomDestBucket(t *testing.T) {
@@ -120,80 +93,19 @@ func Test_GetLastListedObjWithCustomDestBucket(t *testing.T) {
 
 	storage := New(c)
 	ctx := context.Background()
-	destBuck := "bucket"
 
-	noDestBuckNoPrefix := tasks.MigrateBucketListObjectsPayload{
-		Sync: tasks.Sync{
-			FromStorage: "a",
-			ToStorage:   "b",
-			ToBucket:    "c",
-		},
-		Bucket: "c",
-		Prefix: "",
-	}
-	r.NoError(storage.SetLastListedObj(ctx, noDestBuckNoPrefix, "nbnp"))
-	noDestBuckWithPrefix := tasks.MigrateBucketListObjectsPayload{
-		Sync: tasks.Sync{
-			FromStorage: "a",
-			ToStorage:   "b",
-			ToBucket:    "c",
-		},
-		Bucket: "c",
-		Prefix: "d",
-	}
-	r.NoError(storage.SetLastListedObj(ctx, noDestBuckWithPrefix, "nbwp"))
-	withDestBuckNoPrefix := tasks.MigrateBucketListObjectsPayload{
-		Sync: tasks.Sync{
-			FromStorage: "a",
-			ToStorage:   "b",
-			ToBucket:    destBuck,
-		},
-		Bucket: "c",
-		Prefix: "",
-	}
-	r.NoError(storage.SetLastListedObj(ctx, withDestBuckNoPrefix, "wbnp"))
-	withDestBuckWithPrefix := tasks.MigrateBucketListObjectsPayload{
-		Sync: tasks.Sync{
-			FromStorage: "a",
-			ToStorage:   "b",
-			ToBucket:    destBuck,
-		},
-		Bucket: "c",
-		Prefix: "d",
-	}
-	r.NoError(storage.SetLastListedObj(ctx, withDestBuckWithPrefix, "wbwp"))
+	// the destination bucket is part of what names a cursor: the same source
+	// bucket migrated to two of them lists twice
+	r.NoError(storage.SetLastListedObj(ctx, "a", "b", "c", "c", "nb"))
+	r.NoError(storage.SetLastListedObj(ctx, "a", "b", "c", "bucket", "wb"))
 
-	res, err := storage.GetLastListedObj(ctx, noDestBuckNoPrefix)
+	res, err := storage.GetLastListedObj(ctx, "a", "b", "c", "c")
 	r.NoError(err)
-	r.EqualValues("nbnp", res)
+	r.EqualValues("nb", res)
 
-	res, err = storage.GetLastListedObj(ctx, noDestBuckWithPrefix)
+	res, err = storage.GetLastListedObj(ctx, "a", "b", "c", "bucket")
 	r.NoError(err)
-	r.EqualValues("nbwp", res)
-
-	res, err = storage.GetLastListedObj(ctx, withDestBuckNoPrefix)
-	r.NoError(err)
-	r.EqualValues("wbnp", res)
-
-	res, err = storage.GetLastListedObj(ctx, withDestBuckWithPrefix)
-	r.NoError(err)
-	r.EqualValues("wbwp", res)
-
-	r.NoError(storage.DelLastListedObj(ctx, noDestBuckNoPrefix))
-	res, _ = storage.GetLastListedObj(ctx, noDestBuckNoPrefix)
-	r.Empty(res)
-
-	r.NoError(storage.DelLastListedObj(ctx, noDestBuckWithPrefix))
-	res, _ = storage.GetLastListedObj(ctx, noDestBuckWithPrefix)
-	r.Empty(res)
-
-	r.NoError(storage.DelLastListedObj(ctx, withDestBuckNoPrefix))
-	res, _ = storage.GetLastListedObj(ctx, withDestBuckNoPrefix)
-	r.Empty(res)
-
-	r.NoError(storage.DelLastListedObj(ctx, withDestBuckWithPrefix))
-	res, _ = storage.GetLastListedObj(ctx, withDestBuckWithPrefix)
-	r.Empty(res)
+	r.EqualValues("wb", res)
 }
 
 func Test_svc_StoreUploadID(t *testing.T) {
