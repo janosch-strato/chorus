@@ -30,6 +30,8 @@ import (
 	"github.com/clyso/chorus/pkg/log"
 	"github.com/clyso/chorus/pkg/metrics"
 	"github.com/clyso/chorus/pkg/replication"
+	"github.com/clyso/chorus/pkg/s3client"
+	"github.com/clyso/chorus/pkg/tasks"
 	"github.com/clyso/chorus/pkg/util"
 )
 
@@ -51,20 +53,28 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 
 		resp, taskList, storage, isApiErr, err := router.Route(r)
 		routeDuration := time.Since(start)
-		if err != nil {
-			metrics.ProxyRequestInternalDuration(xctx.GetMethod(ctx).String(), storage, body.internalDuration())
-			timingFields(logger.Info().Err(err), timing).
-				Str(log.Storage, storage).
-				Dur("route_duration", routeDuration).
-				Msg("proxy: request failed")
-			util.WriteError(r.Context(), w, err)
-			return
-		}
+		// Before anything can return: a route that failed may still hold a
+		// connection open, and the paths below leave by more than one door.
 		defer func() {
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
 			}
 		}()
+		if err != nil {
+			metrics.ProxyRequestInternalDuration(xctx.GetMethod(ctx).String(), storage, body.internalDuration())
+			event := logger.Info().Err(err).
+				Str(log.Storage, storage).
+				Dur("route_duration", routeDuration).
+				Int("repl_tasks", replicate(ctx, replSvc, taskList, logger))
+			// The client is still there and has to be told.
+			if r.Context().Err() != nil {
+				timingFields(event, timing).Msg("proxy: client disconnected")
+				return
+			}
+			timingFields(event, timing).Msg("proxy: request failed")
+			util.WriteError(r.Context(), w, err)
+			return
+		}
 		var enqueueDuration time.Duration
 		ctx = log.WithStorage(ctx, storage)
 		// TODO: is it reachable? This branch is active only if err == nil
@@ -72,15 +82,20 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 			zerolog.Ctx(ctx).Info().Err(err).Msg("s3 api error returned")
 			// create replication tasks according to replication rules
 		} else {
-			replCtx := context.WithoutCancel(ctx)
 			enqueueStart := time.Now()
-			for _, task := range taskList {
-				replErr := replSvc.Replicate(replCtx, task)
-				if replErr != nil {
-					logger.Err(replErr).Msg("unable to handle replication")
-				}
-			}
+			replicate(ctx, replSvc, taskList, logger)
 			enqueueDuration = time.Since(enqueueStart)
+		}
+		// Nobody to hand the answer to; the replication above was what
+		// mattered.
+		if r.Context().Err() != nil {
+			timingFields(logger.Info(), timing).
+				Str(log.Storage, storage).
+				Dur("route_duration", routeDuration).
+				Int("status", resp.StatusCode).
+				Dur("repl_enqueue_duration", enqueueDuration).
+				Msg("proxy: client disconnected")
+			return
 		}
 		// Forward response to original client
 		for k, v := range resp.Header {
@@ -89,10 +104,11 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 		internalDuration := body.internalDuration()
 		metrics.ProxyRequestInternalDuration(xctx.GetMethod(ctx).String(), storage, internalDuration)
 		w.WriteHeader(resp.StatusCode)
+		defer abortIfStuckAfterClientGone(r.Context(), resp)()
 		written, err := io.Copy(w, resp.Body)
 		if err != nil {
-			logger.Err(err).Msg("unable to copy response body")
-			w.WriteHeader(http.StatusInternalServerError)
+			// The status is out, so there is no telling the client.
+			logger.Err(err).Int64("bytes", written).Msg("unable to copy response body")
 			return
 		}
 		// repl_enqueue_duration is the proxy side of a replication: recording
@@ -111,6 +127,58 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 			Dur("repl_enqueue_duration", enqueueDuration).
 			Msg("proxy: request done")
 	})
+}
+
+// How long an answer is given to move after the client it was for has gone.
+// The same order as the drain's own budget: long enough for a copy that is
+// still getting somewhere, short enough not to hold a request on a storage
+// that has stopped.
+const clientGoneBudget = 2 * time.Second
+
+// A storage that goes quiet mid answer leaves the copy above blocked on a
+// read, and there the client leaving is never noticed: nothing is written to
+// it to fail. From the first byte the read no longer follows the context it
+// was made on either, see cancelUntilAnswered. So the client going starts a
+// clock, and an answer that still has not moved when it runs out is given up
+// on.
+//
+// The wait is what keeps an answer that is still arriving: there the copy's
+// next write fails by itself, and closing the body reads out the rest, so the
+// connection is kept. Only one that has stopped reaches the end of the clock,
+// and that one has no connection worth keeping.
+//
+// The returned func ends the watch. A callback already under way when it is
+// called may still abort, which costs nothing: an answer that has been closed
+// has no request left to end.
+func abortIfStuckAfterClientGone(ctx context.Context, resp *http.Response) func() {
+	var giveUp atomic.Pointer[time.Timer]
+	stopWatching := context.AfterFunc(ctx, func() {
+		giveUp.Store(time.AfterFunc(clientGoneBudget, func() { s3client.AbortResponse(resp) }))
+	})
+	return func() {
+		stopWatching()
+		if timer := giveUp.Load(); timer != nil {
+			timer.Stop()
+		}
+	}
+}
+
+// On a context of its own: the change is on the storage, so recording it must
+// not depend on the client that asked still being there.
+func replicate(ctx context.Context, replSvc replication.Service, taskList []tasks.SyncTask, logger *zerolog.Logger) int {
+	if len(taskList) == 0 {
+		return 0
+	}
+	replCtx := context.WithoutCancel(ctx)
+	var enqueued int
+	for _, task := range taskList {
+		if err := replSvc.Replicate(replCtx, task); err != nil {
+			logger.Err(err).Msg("unable to handle replication")
+			continue
+		}
+		enqueued++
+	}
+	return enqueued
 }
 
 // clientRequestBody notes when the request was last read from. An upload is

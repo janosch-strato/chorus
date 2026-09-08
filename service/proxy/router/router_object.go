@@ -17,6 +17,7 @@
 package router
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -51,17 +52,23 @@ func (r *router) putObject(req *http.Request) (resp *http.Response, taskList []t
 		return nil, nil, "", false, err
 	}
 	resp, isApiErr, err = client.Do(req)
-	if err != nil || isApiErr {
+	if isApiErr || !dom.StorageMayHaveActed(err) {
 		return
 	}
-	zerolog.Ctx(ctx).Info().Str("etag", resp.Header.Get("ETag")).Msg("uploaded object with etag")
+	if resp != nil {
+		zerolog.Ctx(ctx).Info().Str("etag", resp.Header.Get("ETag")).Msg("uploaded object with etag")
+	}
 
 	obj := dom.Object{Bucket: bucket, Name: object}
+	// The upload is on the storage whether or not the client stayed for the
+	// answer, see cancelUntilWritten, so asking after it must not depend on
+	// that client either. Without a size the copy is later admitted to the
+	// worker's memory budget as though it were empty.
+	statCtx := context.WithoutCancel(ctx)
 	var objSize int64
-	objInfo, err := client.S3().StatObject(ctx, bucket, object, mclient.StatObjectOptions{})
-	if err != nil {
-		zerolog.Ctx(ctx).Err(err).Msg("unable to get uploaded object size")
-		err = nil
+	objInfo, statErr := client.S3().StatObject(statCtx, bucket, object, mclient.StatObjectOptions{})
+	if statErr != nil {
+		zerolog.Ctx(ctx).Err(statErr).Msg("unable to get uploaded object size")
 	} else {
 		objSize = objInfo.Size
 	}
@@ -119,14 +126,26 @@ func (r *router) deleteObjects(req *http.Request) (resp *http.Response, taskList
 	}
 
 	resp, isApiErr, err = client.Do(req)
-	if err != nil || isApiErr {
+	if isApiErr || !dom.StorageMayHaveActed(err) {
+		return
+	}
+	if err != nil {
+		// Without the answer it is unknown which deletions were carried out.
+		// The worker leaves the objects alone that are still on the source.
+		for _, object := range reqBody.Objects {
+			taskList = append(taskList, &tasks.ObjectSyncPayload{
+				Object:  object.toDom(bucket),
+				Sync:    tasks.Sync{FromStorage: storage},
+				Deleted: true,
+			})
+		}
 		return
 	}
 
 	respBody := multiDeleteResult{}
-	err = s3client.ExtractRespBody(resp, &respBody)
-	if err != nil {
-		zerolog.Ctx(ctx).Err(err).Msg("unable to unmarshal multiDeleteResult response body")
+	if xmlErr := s3client.ExtractRespBody(resp, &respBody); xmlErr != nil {
+		zerolog.Ctx(ctx).Err(xmlErr).Msg("unable to unmarshal multiDeleteResult response body")
+		err = xmlErr
 		return
 	}
 

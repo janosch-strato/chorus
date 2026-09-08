@@ -2,6 +2,7 @@ package s3
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -226,4 +227,69 @@ func TestBucketMappingValidation(t *testing.T) {
 		r.NoError(err)
 	})
 
+}
+
+func storageConf(t *testing.T, s Storage) *StorageConfig {
+	t.Helper()
+	s.Provider = "Other"
+	s.Address = NewConfAddr("http://storage:9000")
+	s.IsMain = true
+	s.Credentials = map[string]CredentialsV4{
+		"user": {AccessKeyID: "ak", SecretAccessKey: "sk"},
+	}
+	return &StorageConfig{Storages: map[string]Storage{"one": s}}
+}
+
+func TestStorageHttpTimeout(t *testing.T) {
+	// An object has no size limit, so neither has the time one may take.
+	t.Run("Unset is no limit at all", func(t *testing.T) {
+		r := require.New(t)
+
+		conf := storageConf(t, Storage{})
+		r.NoError(conf.Init())
+		r.Zero(conf.Storages["one"].HttpTimeout,
+			"a limit nobody asked for was invented for this storage")
+	})
+
+	t.Run("What is configured is kept", func(t *testing.T) {
+		r := require.New(t)
+
+		conf := storageConf(t, Storage{HttpTimeout: 90 * time.Second})
+		r.NoError(conf.Init())
+		r.Equal(90*time.Second, conf.Storages["one"].HttpTimeout)
+	})
+}
+
+func TestStorageResponseHeaderTimeout(t *testing.T) {
+	// This one may have a default: it counts neither sending nor receiving.
+	t.Run("Unset is the default", func(t *testing.T) {
+		r := require.New(t)
+
+		conf := storageConf(t, Storage{})
+		r.NoError(conf.Init())
+		r.Equal(2*time.Minute, conf.Storages["one"].ResponseHeaderTimeout)
+	})
+
+	t.Run("What is configured is kept", func(t *testing.T) {
+		r := require.New(t)
+
+		conf := storageConf(t, Storage{ResponseHeaderTimeout: 30 * time.Second})
+		r.NoError(conf.Init())
+		r.Equal(30*time.Second, conf.Storages["one"].ResponseHeaderTimeout)
+	})
+
+	// Standalone mode has worker and proxy each validate a copy of an already
+	// validated config.
+	t.Run("A second Init keeps what the first made of it", func(t *testing.T) {
+		for _, configured := range []time.Duration{0, 30 * time.Second, -1} {
+			r := require.New(t)
+
+			conf := storageConf(t, Storage{ResponseHeaderTimeout: configured})
+			r.NoError(conf.Init())
+			once := conf.Storages["one"].ResponseHeaderTimeout
+			r.NoError(conf.Init())
+			r.Equal(once, conf.Storages["one"].ResponseHeaderTimeout,
+				"configured %v changed on a second Init", configured)
+		}
+	})
 }
