@@ -66,11 +66,26 @@ type Config struct {
 	// read from the source storage instead. Reading the answer itself is not
 	// bounded by it. A negative value turns it off.
 	DestinationAnswerTimeout time.Duration `yaml:"destinationAnswerTimeout"`
+	// DestinationTimeoutLimit is how many reads in a row the destination may
+	// fail to answer in time before such reads are paused, see
+	// DestinationPause. A negative value turns the pausing off.
+	DestinationTimeoutLimit int `yaml:"destinationTimeoutLimit"`
+	// DestinationPause is how long reads stay on the source storage once the
+	// destination reached DestinationTimeoutLimit. A negative value turns the
+	// pausing off.
+	DestinationPause time.Duration `yaml:"destinationPause"`
 }
 
 // A destination slower than this is not the faster storage the read went to
 // it for.
 const defaultDestinationAnswerTimeout = time.Second * 5
+
+// Answer timeouts in a row that take a destination out of use, and how long
+// reads are kept off it afterwards.
+const (
+	defaultDestinationTimeoutLimit = 3
+	defaultDestinationPause        = time.Minute * 5
+)
 
 func (c *Config) Validate() error {
 	if err := c.Common.Validate(); err != nil {
@@ -108,6 +123,12 @@ func (c *Config) Validate() error {
 
 	if c.DestinationAnswerTimeout == 0 {
 		c.DestinationAnswerTimeout = defaultDestinationAnswerTimeout
+	}
+	if c.DestinationTimeoutLimit == 0 {
+		c.DestinationTimeoutLimit = defaultDestinationTimeoutLimit
+	}
+	if c.DestinationPause == 0 {
+		c.DestinationPause = defaultDestinationPause
 	}
 
 	if c.Port <= 0 {

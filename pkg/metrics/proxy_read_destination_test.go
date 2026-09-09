@@ -45,6 +45,16 @@ func Test_ProxyDestinationReadTimeout(t *testing.T) {
 	r.NotNil(c, "series not exported")
 	r.EqualValues(2, c.GetValue())
 
-	// a destination that answers is not counted here
 	r.Nil(counter(t, "proxy_destination_read_timeouts_total", "other-destination"))
+}
+
+func Test_ProxyDestinationPaused(t *testing.T) {
+	r := require.New(t)
+	ProxyDestinationPaused("paused-destination")
+
+	c := counter(t, "proxy_destination_read_pauses_total", "paused-destination")
+	r.NotNil(c, "series not exported")
+	r.EqualValues(1, c.GetValue())
+
+	r.Nil(counter(t, "proxy_destination_read_pauses_total", "other-destination"))
 }

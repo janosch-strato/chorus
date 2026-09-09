@@ -3,6 +3,8 @@ port: 9669
 headBucketCache: enabled # answer a bucket existence check from the answer of the first one
 readFromDestination: false # serve reads of already migrated objects from the replication destination instead of the source storage
 destinationAnswerTimeout: 5s # how long such a read waits for the destination storage to answer, connecting to it included, before it is read from the source storage instead. reading the answer itself is not bounded by it. negative turns it off
+destinationTimeoutLimit: 3 # how many reads in a row the destination storage may fail to answer in time before such reads are paused for destinationPause. negative turns the pausing off
+destinationPause: 5m # how long reads stay on the source storage once the destination storage reached destinationTimeoutLimit. negative turns the pausing off
 cors:
   enabled: false
   allowAll: false

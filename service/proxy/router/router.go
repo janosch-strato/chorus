@@ -47,7 +47,9 @@ func NewRouter(
 	policySvc policy.Service,
 	storageSvc storage.Service,
 	limit ratelimit.RPM,
-	destinationAnswerTimeout time.Duration) Router {
+	destinationAnswerTimeout time.Duration,
+	destinationTimeoutLimit int,
+	destinationPauseTime time.Duration) Router {
 	return &router{
 		clients:                  clients,
 		taskClient:               taskClient,
@@ -56,6 +58,7 @@ func NewRouter(
 		storageSvc:               storageSvc,
 		limit:                    limit,
 		destinationAnswerTimeout: destinationAnswerTimeout,
+		destPause:                newDestinationPause(destinationTimeoutLimit, destinationPauseTime),
 	}
 }
 
@@ -68,6 +71,8 @@ type router struct {
 	limit      ratelimit.RPM
 	// destinationAnswerTimeout, see withAnswerTimeout.
 	destinationAnswerTimeout time.Duration
+	// See destination_pause.go.
+	destPause *destinationPause
 }
 
 func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks.SyncTask, storage string, isApiErr bool, err error) {
