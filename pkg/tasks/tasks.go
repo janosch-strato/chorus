@@ -220,6 +220,9 @@ type ObjectSyncPayload struct {
 	//FromVersion int64
 	ObjSize int64
 	Deleted bool
+	// The answer was never read: a reason to go and look, not a record of what
+	// happened. Nothing acts on it without asking the source storage first.
+	Unconfirmed bool
 }
 
 type BucketDeletePayload struct {

@@ -118,10 +118,11 @@ func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks
 	}
 
 	// The storage carries these out on its own, and its answer is the only
-	// sign that it is done: the task made afterwards reads the source, and
-	// reads it too early without waiting.
+	// sign that it is done. For a delete the answer is also the only record of
+	// what it did; for the other two the task made afterwards reads the
+	// source, and reads it too early without waiting.
 	switch method {
-	case s3.CopyObject, s3.CompleteMultipartUpload:
+	case s3.DeleteObject, s3.DeleteObjects, s3.CopyObject, s3.CompleteMultipartUpload:
 		req = req.WithContext(xctx.SetResponseNeeded(ctx))
 	}
 
@@ -206,6 +207,16 @@ func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks
 		task.SetFrom(storage)
 		if taskList == nil {
 			taskList = []tasks.SyncTask{task}
+		}
+	}
+
+	// The request reached the storage and no answer was read, so what follows
+	// is a guess, see tasks.ObjectSyncPayload.Unconfirmed.
+	if written && err != nil {
+		for _, t := range taskList {
+			if payload, ok := t.(*tasks.ObjectSyncPayload); ok {
+				payload.Unconfirmed = true
+			}
 		}
 	}
 

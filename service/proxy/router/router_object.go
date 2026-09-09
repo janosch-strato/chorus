@@ -130,8 +130,8 @@ func (r *router) deleteObjects(req *http.Request) (resp *http.Response, taskList
 		return
 	}
 	if err != nil {
-		// Without the answer it is unknown which deletions were carried out.
-		// The worker leaves the objects alone that are still on the source.
+		// Waited out now, so the storage took the batch and never answered.
+		// Which of the keys went is unknown, so all are looked at.
 		for _, object := range reqBody.Objects {
 			taskList = append(taskList, &tasks.ObjectSyncPayload{
 				Object:  object.toDom(bucket),
