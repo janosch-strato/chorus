@@ -76,15 +76,18 @@ func deleteObjectsReq(keys ...string) *http.Request {
 	return req.WithContext(ctx)
 }
 
-func deletedKeys(t *testing.T, taskList []tasks.SyncTask) (keys []string) {
+func deletedKeys(t *testing.T, taskList []tasks.SyncTask) (keys []string, unconfirmed int) {
 	t.Helper()
 	for _, task := range taskList {
 		payload, ok := task.(*tasks.ObjectSyncPayload)
 		require.True(t, ok, "unexpected task type %T", task)
 		require.True(t, payload.Deleted, "a delete task list holds a task that is not a delete")
 		keys = append(keys, payload.Object.Name)
+		if payload.Unconfirmed {
+			unconfirmed++
+		}
 	}
-	return keys
+	return keys, unconfirmed
 }
 
 func newTestRouter(t *testing.T, client s3client.Client) *router {

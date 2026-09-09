@@ -18,6 +18,7 @@ package router
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -130,7 +131,7 @@ func TestRouteDeleteObjectsReplicatesWhenOnlyTheAnswerNamesVersions(t *testing.T
 	_, taskList, _, _, err := rt.Route(deleteObjectsReq("one", "two"))
 	r.NoError(err)
 
-	keys := deletedKeys(t, taskList)
+	keys, _ := deletedKeys(t, taskList)
 	r.ElementsMatch([]string{"one", "two"}, keys,
 		"the delete markers the storage minted were taken for versions the client named")
 }
@@ -170,6 +171,97 @@ func TestRouteDeleteObjectVersionDoesNotDropTheMigratedRecord(t *testing.T) {
 		"the object stopped counting as migrated although nothing was deleted, so reads leave the destination for no reason")
 }
 
+func TestRouteDeleteObjects(t *testing.T) {
+	// The whole point of waiting for the answer: what the storage refused is
+	// named there and nowhere else.
+	t.Run("Only the keys the storage says it deleted are replicated", func(t *testing.T) {
+		r := require.New(t)
+
+		var sawResponseNeeded bool
+		rt := newTestRouter(t, &fakeClient{do: func(req *http.Request) (*http.Response, bool, error) {
+			sawResponseNeeded = xctx.GetResponseNeeded(req.Context())
+			body := `<DeleteResult>` +
+				`<Deleted><Key>gone</Key></Deleted>` +
+				`<Error><Key>refused</Key><Code>AccessDenied</Code></Error>` +
+				`</DeleteResult>`
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Header:     http.Header{},
+			}, false, nil
+		}})
+
+		_, taskList, storage, isApiErr, err := rt.Route(deleteObjectsReq("gone", "refused"))
+		r.NoError(err)
+		r.False(isApiErr)
+		r.Equal(testSource, storage)
+		r.True(sawResponseNeeded, "the delete did not wait for the storage's answer")
+
+		keys, unconfirmed := deletedKeys(t, taskList)
+		r.ElementsMatch([]string{"gone"}, keys, "a key the storage refused was replicated as deleted")
+		r.Zero(unconfirmed, "an answered delete is not a guess")
+	})
+
+	// The fallback, now reachable only when the storage took the batch and
+	// then died: which of the keys went is unknown, so all of them are looked
+	// at rather than trusted.
+	t.Run("A storage that never answered puts every key up unconfirmed", func(t *testing.T) {
+		r := require.New(t)
+
+		rt := newTestRouter(t, &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
+			return nil, false, fmt.Errorf("%w: connection reset", dom.ErrStorageAnswerLost)
+		}})
+
+		_, taskList, _, _, err := rt.Route(deleteObjectsReq("one", "two"))
+		r.ErrorIs(err, dom.ErrStorageAnswerLost)
+
+		keys, unconfirmed := deletedKeys(t, taskList)
+		r.ElementsMatch([]string{"one", "two"}, keys)
+		r.Equal(len(keys), unconfirmed, "a guess was passed on as a record of what happened")
+	})
+
+	t.Run("A client that left before the request was written changes nothing", func(t *testing.T) {
+		r := require.New(t)
+
+		rt := newTestRouter(t, &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
+			return nil, false, fmt.Errorf("%w: context canceled", dom.ErrClientGone)
+		}})
+
+		_, taskList, _, _, err := rt.Route(deleteObjectsReq("one", "two"))
+		r.ErrorIs(err, dom.ErrClientGone)
+		r.Empty(taskList, "nothing reached the storage, so there is nothing to replicate")
+	})
+}
+
+func TestRouteDeleteObjectWaitsForTheAnswer(t *testing.T) {
+	r := require.New(t)
+
+	var sawResponseNeeded bool
+	rt := newTestRouter(t, &fakeClient{do: func(req *http.Request) (*http.Response, bool, error) {
+		sawResponseNeeded = xctx.GetResponseNeeded(req.Context())
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Body:       io.NopCloser(strings.NewReader("")),
+			Header:     http.Header{},
+		}, false, nil
+	}})
+
+	req := httptest.NewRequest(http.MethodDelete, "/"+testBucket+"/obj", nil)
+	ctx := req.Context()
+	ctx = xctx.SetUser(ctx, testUser)
+	ctx = xctx.SetBucket(ctx, testBucket)
+	ctx = xctx.SetObject(ctx, "obj")
+	ctx = xctx.SetMethod(ctx, s3.DeleteObject)
+
+	_, taskList, _, _, err := rt.Route(req.WithContext(ctx))
+	r.NoError(err)
+	r.True(sawResponseNeeded, "the delete did not wait for the storage's answer")
+
+	keys, unconfirmed := deletedKeys(t, taskList)
+	r.Equal([]string{"obj"}, keys)
+	r.Zero(unconfirmed)
+}
+
 func objectReq(req *http.Request, method s3.Method, object string) *http.Request {
 	ctx := req.Context()
 	ctx = xctx.SetUser(ctx, testUser)
@@ -192,6 +284,8 @@ func TestRouteWaitsForTheAnswer(t *testing.T) {
 		req   *http.Request
 		waits bool
 	}{
+		{"DeleteObject", deleteObjectReq("obj", ""), true},
+		{"DeleteObjects", deleteObjectsReq("obj"), true},
 		{"CopyObject", objectReq(copyReq, s3.CopyObject, "obj"), true},
 		{"CompleteMultipartUpload", objectReq(completeReq, s3.CompleteMultipartUpload, "obj"), true},
 		// A put is on the storage as soon as its body is out.

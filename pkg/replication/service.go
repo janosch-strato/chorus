@@ -154,9 +154,13 @@ func (s *svc) Replicate(ctx context.Context, task tasks.SyncTask) error {
 			}
 		}
 	case *tasks.ObjectSyncPayload:
-		if t.Deleted {
+		switch {
+		case t.Deleted && t.Unconfirmed:
+			// Nobody said these were deleted, and their versions are what is
+			// left for the worker to ask the source about.
+		case t.Deleted:
 			err = s.versionSvc.DeleteObjAll(ctx, t.Object)
-		} else {
+		default:
 			_, err = s.versionSvc.IncrementObj(ctx, t.Object, meta.ToDest(t.FromStorage, ""))
 		}
 		if err != nil {
