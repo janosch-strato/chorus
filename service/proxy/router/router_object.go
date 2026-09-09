@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	mclient "github.com/minio/minio-go/v7"
 	"github.com/rs/zerolog"
@@ -109,6 +110,12 @@ func (r *router) deleteObjects(req *http.Request) (resp *http.Response, taskList
 	if err != nil {
 		zerolog.Ctx(ctx).Err(err).Msg("unable to unmarshal deleteObjectsRequest request body")
 		return
+	}
+
+	// The storage carries a batch out in one go, so one key that cannot be
+	// replicated cannot be held back once it is sent.
+	if slices.ContainsFunc(reqBody.Objects, func(o objectID) bool { return o.VersionID != "" }) {
+		return nil, nil, storage, false, errDeleteVersionRefused
 	}
 
 	resp, isApiErr, err = client.Do(req)

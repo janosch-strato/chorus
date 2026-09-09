@@ -87,6 +87,12 @@ func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks
 		if !features.Versioning(ctx) {
 			return nil, nil, "", false, fmt.Errorf("versioning api is disabled: %w", dom.ErrNotImplemented)
 		}
+	case s3.DeleteObject:
+		// Asked before the storage is, since a delete cannot be taken back.
+		// The batch is asked in deleteObjects, where its body is read.
+		if req.URL.Query().Get("versionId") != "" {
+			return nil, nil, "", false, errDeleteVersionRefused
+		}
 	}
 
 	switch method {
@@ -169,3 +175,10 @@ func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks
 
 	return
 }
+
+// A delete naming a version is refused: the id names the version the source
+// minted, and the destination gave its copy an id of its own that nothing maps
+// back. Carrying it out on the source alone is worse than refusing it - the
+// client is told the version is gone while the destination still holds it, and
+// a read after the switch returns what the client deleted.
+var errDeleteVersionRefused = fmt.Errorf("%w: deleting a named version: the destination minted its own version ids and none of them maps back to this one", dom.ErrNotImplemented)
