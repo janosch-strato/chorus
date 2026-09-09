@@ -59,10 +59,17 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 			util.WriteError(r.Context(), w, err)
 			return
 		}
+		copyDone := false
 		defer func() {
-			if resp != nil && resp.Body != nil {
-				_ = resp.Body.Close()
+			if resp == nil || resp.Body == nil {
+				return
 			}
+			if copyDone {
+				_ = resp.Body.Close()
+				return
+			}
+			// Needed so the connection can return to its pool.
+			drainAndClose(resp.Body, bodyDrainBudget)
 		}()
 		var enqueueDuration time.Duration
 		ctx = log.WithStorage(ctx, storage)
@@ -92,9 +99,9 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 		written, err := io.Copy(w, resp.Body)
 		if err != nil {
 			logger.Err(err).Msg("unable to copy response body")
-			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+		copyDone = true
 		// repl_enqueue_duration is the proxy side of a replication: recording
 		// the new version and queueing the task. The replication itself
 		// happens later, in a worker, which measures it there. Logged per
@@ -111,6 +118,25 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 			Dur("repl_enqueue_duration", enqueueDuration).
 			Msg("proxy: request done")
 	})
+}
+
+// bodyDrainBudget bounds how long finishing a storage response may hold a
+// request goroutine open. It is only used when the client is gone already.
+const bodyDrainBudget = 2 * time.Second
+
+// drainAndClose finishes reading body so that its connection can be reused,
+// then closes it.
+func drainAndClose(body io.ReadCloser, budget time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, body)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(budget):
+	}
+	_ = body.Close()
 }
 
 // clientRequestBody notes when the request was last read from. An upload is
