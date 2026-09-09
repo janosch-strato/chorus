@@ -119,7 +119,8 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	logger.Info().Msg("s3 clients connected")
 
 	routeSvc := router.NewRouter(s3Clients, taskClient, verSvc, policySvc, storageSvc, queueSvc, limiter,
-		conf.ReadFromDestination, conf.DestinationAnswerTimeout)
+		conf.ReadFromDestination, conf.DestinationAnswerTimeout,
+		conf.DestinationTimeoutLimit, conf.DestinationPause)
 	replSvc := replication.New(taskClient, verSvc, policySvc)
 	handler := router.Serve(routeSvc, replSvc)
 	handler = auth.Middleware(conf.Auth, conf.Storage.Storages).Wrap(handler)

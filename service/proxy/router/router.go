@@ -49,7 +49,9 @@ func NewRouter(
 	queueSvc tasks.QueueService,
 	limit ratelimit.RPM,
 	readFromDestination bool,
-	destinationAnswerTimeout time.Duration) Router {
+	destinationAnswerTimeout time.Duration,
+	destinationTimeoutLimit int,
+	destinationPauseTime time.Duration) Router {
 	return &router{
 		clients:                  clients,
 		taskClient:               taskClient,
@@ -60,6 +62,7 @@ func NewRouter(
 		limit:                    limit,
 		readFromDestination:      readFromDestination,
 		destinationAnswerTimeout: destinationAnswerTimeout,
+		destPause:                newDestinationPause(destinationTimeoutLimit, destinationPauseTime),
 		headCache:                newHeadBucketCache(),
 	}
 }
@@ -78,7 +81,9 @@ type router struct {
 	readFromDestination bool
 	// destinationAnswerTimeout, see withAnswerTimeout.
 	destinationAnswerTimeout time.Duration
-	headCache                *headBucketCache
+	// See destination_pause.go.
+	destPause *destinationPause
+	headCache *headBucketCache
 }
 
 func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks.SyncTask, storage string, isApiErr bool, err error) {
