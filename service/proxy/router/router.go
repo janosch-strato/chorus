@@ -53,6 +53,7 @@ func NewRouter(
 		policySvc:  policySvc,
 		storageSvc: storageSvc,
 		limit:      limit,
+		destPause:  newDestinationPause(),
 	}
 }
 
@@ -63,6 +64,9 @@ type router struct {
 	policySvc  policy.Service
 	storageSvc storage.Service
 	limit      ratelimit.RPM
+	// destPause keeps reads off a destination that stopped answering them,
+	// see destination_pause.go.
+	destPause *destinationPause
 }
 
 func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks.SyncTask, storage string, isApiErr bool, err error) {

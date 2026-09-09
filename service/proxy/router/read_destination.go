@@ -68,6 +68,7 @@ const (
 	skipNoReplication     = "no_replication"
 	skipOtherSource       = "not_migration_source"
 	skipManyDestinations  = "multiple_destinations"
+	skipDestinationPaused = "destination_paused"
 	skipPolicyError       = "policy_error"
 	skipMetaError         = "meta_error"
 	skipDestinationBehind = "destination_behind"
@@ -121,6 +122,9 @@ func (r *router) destinationReadDecision(req *http.Request, source, user, bucket
 	dest, reason := r.migrationDestination(ctx, source, user, bucket)
 	if reason != "" {
 		return "", "", reason
+	}
+	if r.destPause.paused(dest.Storage) {
+		return "", "", skipDestinationPaused
 	}
 	if reason = r.objectMigrated(ctx, source, user, bucket, object, dest); reason != "" {
 		return "", "", reason
@@ -313,19 +317,25 @@ func (r *router) readDestination(req *http.Request, destStorage, destBucket stri
 	}
 	resp, isApiErr, err = client.Do(destReq)
 	switch {
+	// Asked before err: a read given up on must not be reported as arrived,
+	// whatever came back afterwards. Its context is cancelled, so its body
+	// would fail halfway through the caller forwarding it.
 	case guard.ranOut():
-		// Asked before the answer: a read that was given up on must not be
-		// reported as one that arrived, whatever came back afterwards. Its
-		// context is cancelled, so its body would fail halfway through the
-		// caller forwarding it. The client is still there, only the
-		// destination is not answering, which the caller tells apart to read
-		// from the source instead.
 		metrics.ProxyDestinationReadTimeout(destStorage)
-		// Join rather than a wrapping format: err is nil when the wait ran
-		// out and an answer turned up all the same.
+		if r.destPause.timedOut(destStorage) {
+			metrics.ProxyDestinationPaused(destStorage)
+			zerolog.Ctx(ctx).Warn().Str("destination_storage", destStorage).
+				Dur("pause", r.destPause.pause()).
+				Msg("read from destination: destination did not answer, pausing reads to it")
+		}
+		// Join, not %w: err is nil when an answer turned up after the wait.
 		err = errors.Join(errDestinationSlow, err)
-	case err == nil && !isApiErr:
-		metrics.ProxyDestinationRead(destStorage)
+	case err == nil:
+		// An api error is an answer too: the destination is there and quick.
+		if !isApiErr {
+			metrics.ProxyDestinationRead(destStorage)
+		}
+		r.destPause.answered(destStorage)
 	}
 	return resp, isApiErr, err
 }

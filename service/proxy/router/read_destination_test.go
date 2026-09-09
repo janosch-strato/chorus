@@ -233,6 +233,23 @@ func Test_router_destinationReadRoute(t *testing.T) {
 		r.Equal(skipOtherSource, reason)
 	})
 
+	t.Run("read from a paused destination is read from source", func(t *testing.T) {
+		r := require.New(t)
+		object := "migrated"
+		clock := newTestClock()
+		rt.destPause = newDestinationPause(1, time.Minute)
+		rt.destPause.now = clock.Now
+		defer func() { rt.destPause = nil }()
+
+		r.True(rt.destPause.timedOut(testDest))
+		_, _, reason := rt.destinationReadDecision(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
+		r.Equal(skipDestinationPaused, reason)
+
+		clock.advance(2 * time.Minute)
+		_, _, reason = rt.destinationReadDecision(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
+		r.Empty(reason)
+	})
+
 	// keep last: adds a second destination to the bucket
 	t.Run("bucket with several destinations is read from source", func(t *testing.T) {
 		r := require.New(t)

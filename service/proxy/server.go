@@ -100,6 +100,12 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	if err = settings.DestinationAnswerTimeout.Set(max(conf.DestinationAnswerTimeout.Milliseconds(), 0)); err != nil {
 		return err
 	}
+	if err = settings.DestinationTimeoutLimit.Set(int64(max(conf.DestinationTimeoutLimit, 0))); err != nil {
+		return err
+	}
+	if err = settings.DestinationPause.Set(max(conf.DestinationPause.Milliseconds(), 0)); err != nil {
+		return err
+	}
 	if err = settings.HeadBucketCache.SetString(conf.HeadBucketCache); err != nil {
 		return err
 	}
