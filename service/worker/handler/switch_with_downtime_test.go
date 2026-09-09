@@ -15,7 +15,6 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 
 	now := time.Now()
 	hourAgo := now.Add(-time.Hour)
-	minuteAgo := now.Add(-time.Minute)
 
 	ctx := context.Background()
 	id := entity.ReplicationStatusID{
@@ -93,14 +92,28 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 		t.Run("from "+string(status)+" to retry later", func(t *testing.T) {
 			r := require.New(t)
 
-			nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{}, entity.ReplicationSwitchInfo{
+			// The clock is pinned because this case turns on the schedule
+			// saying "not yet": against the wall clock, "@hourly" a minute
+			// after the last start is due during the hour's first minute.
+			lastStart := time.Date(2026, 1, 15, 10, 29, 0, 0, time.UTC)
+			entity.TimeNow = func() time.Time { return lastStart.Add(time.Minute) }
+			t.Cleanup(func() { entity.TimeNow = time.Now })
+
+			nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{
+				// Filled in although unread here, so that a change reaching
+				// it fails on an assertion and not on a nil pointer.
+				ReplicationStatus: &entity.ReplicationStatus{
+					CreatedAt:      lastStart.Add(-time.Hour),
+					ListingStarted: true,
+				},
+			}, entity.ReplicationSwitchInfo{
 				ReplicationSwitchDowntimeOpts: entity.ReplicationSwitchDowntimeOpts{
 					// run every hour
 					Cron: stringPtr("@hourly"),
 				},
-				CreatedAt: hourAgo,
+				CreatedAt: lastStart.Add(-time.Hour),
 				// was recently attempted
-				LastStartedAt: &minuteAgo,
+				LastStartedAt: &lastStart,
 				LastStatus:    status,
 			})
 			r.NoError(err)
