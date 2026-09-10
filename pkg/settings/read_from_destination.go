@@ -14,20 +14,16 @@
  * limitations under the License.
  */
 
-// The settings of chorus that an operator can change while it runs, over the
-// maint api. A change lasts until the next restart, which starts from the
-// config again, and that is what makes one safe to change on a running
-// migration.
-//
-// What a switch is made of is pkg/switches. Where one is set from at startup
-// is neither here nor there: that is a config key of whatever part of chorus
-// the setting belongs to, and its Start sets it.
-
 package settings
 
 import "github.com/clyso/chorus/pkg/switches"
 
-// All returns every switch, so that the api needs no list of its own.
-func All() []switches.Switch {
-	return []switches.Switch{ListingSpeed, ReadFromDestination, HeadBucketCache}
-}
+// Whether this process takes part in reading migrated objects from the
+// replication destination: the proxy serves such reads from there, and the
+// worker records what it copies for the proxy to read. Off unless a migration
+// asks for it.
+//
+// Off again at runtime is the lever for a destination that turns out to answer
+// wrongly: reads go back to the source at once, and the records the worker
+// keeps meanwhile let it be turned on again without listing anything twice.
+var ReadFromDestination = switches.NewBool("read-from-destination", false, nil)
