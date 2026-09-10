@@ -5,6 +5,9 @@ worker:
   # auto: keep the listing just ahead of the object copies. Pausing a listing
   # entirely is not one of these: pause its migr_list_obj queue instead.
   listingSpeed: full
+  # keep the per object records that the proxy setting readFromDestination
+  # reads. Standalone takes this from the proxy section.
+  readFromDestination: false
   queueUpdateInterval: 5s
   pauseRetryInterval: 30s
   switchRetryInterval: 30s

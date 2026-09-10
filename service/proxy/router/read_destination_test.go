@@ -31,6 +31,7 @@ import (
 	"github.com/clyso/chorus/pkg/meta"
 	"github.com/clyso/chorus/pkg/policy"
 	"github.com/clyso/chorus/pkg/s3"
+	"github.com/clyso/chorus/pkg/settings"
 	"github.com/clyso/chorus/pkg/tasks"
 	"github.com/clyso/chorus/pkg/testutil"
 )
@@ -70,11 +71,12 @@ func Test_router_destinationReadRoute(t *testing.T) {
 
 	versionSvc := meta.NewVersionService(c)
 	queueSvc := &tasks.QueueServiceMock{}
+	require.NoError(t, settings.ReadFromDestination.Set(true))
+	t.Cleanup(func() { require.NoError(t, settings.ReadFromDestination.Set(false)) })
 	rt := &router{
-		policySvc:           policySvc,
-		versionSvc:          versionSvc,
-		queueSvc:            queueSvc,
-		readFromDestination: true,
+		policySvc:  policySvc,
+		versionSvc: versionSvc,
+		queueSvc:   queueSvc,
 	}
 
 	t.Run("migrated object is read from destination", func(t *testing.T) {
@@ -173,8 +175,8 @@ func Test_router_destinationReadRoute(t *testing.T) {
 	t.Run("disabled option reads from source", func(t *testing.T) {
 		r := require.New(t)
 		object := "migrated"
-		rt.readFromDestination = false
-		defer func() { rt.readFromDestination = true }()
+		r.NoError(settings.ReadFromDestination.Set(false))
+		defer func() { r.NoError(settings.ReadFromDestination.Set(true)) }()
 
 		_, _, ok := rt.destinationReadRoute(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
 		r.False(ok)
@@ -307,7 +309,7 @@ func Test_router_adjustObjReadRoute_reportsSwitchInProgress(t *testing.T) {
 	r.NoError(policySvc.ObjListStarted(ctx, replID))
 	queueSvc.InitReplicationDone(replID)
 
-	rt := &router{policySvc: policySvc, versionSvc: meta.NewVersionService(c), queueSvc: queueSvc, readFromDestination: true}
+	rt := &router{policySvc: policySvc, versionSvc: meta.NewVersionService(c), queueSvc: queueSvc}
 	req := readReq(s3.GetObject, "migrated", "/"+testBucket+"/migrated")
 
 	storage, switchInProgress, err := rt.adjustObjReadRoute(req.Context(), testSource, testUser, testBucket)

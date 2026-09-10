@@ -35,7 +35,9 @@ func Test_headBucketCache(t *testing.T) {
 		"Date":                []string{"Tue, 01 Sep 2026 08:00:00 GMT"},
 		"X-Amz-Request-Id":    []string{"one-request-only"},
 	}
+	require.NoError(t, settings.ReadFromDestination.Set(true))
 	t.Cleanup(func() {
+		require.NoError(t, settings.ReadFromDestination.Set(false))
 		// the cache is one per process: empty it for whoever runs next
 		require.NoError(t, settings.HeadBucketCache.SetString(switches.Disabled))
 		require.NoError(t, settings.HeadBucketCache.SetString(switches.Enabled))
@@ -55,7 +57,7 @@ func Test_headBucketCache(t *testing.T) {
 	t.Run("a remembered bucket is answered without a storage", func(t *testing.T) {
 		r := require.New(t)
 		remember(testUser, testBucket, answer)
-		rt := &router{readFromDestination: true}
+		rt := &router{}
 
 		resp, storage, isApiErr, err := rt.headBucket(readReq(s3.HeadBucket, "", "/"+testBucket))
 		r.NoError(err)
