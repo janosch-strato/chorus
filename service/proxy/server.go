@@ -40,6 +40,7 @@ import (
 	"github.com/clyso/chorus/pkg/rpc"
 	"github.com/clyso/chorus/pkg/s3"
 	"github.com/clyso/chorus/pkg/s3client"
+	"github.com/clyso/chorus/pkg/settings"
 	"github.com/clyso/chorus/pkg/storage"
 	"github.com/clyso/chorus/pkg/tasks"
 	"github.com/clyso/chorus/pkg/trace"
@@ -90,6 +91,10 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	redis.SetLogger(log.NewStdLogger())
 	appRedis.AddHook(util.TimingHook{})
 	logger.Info().Msg("app redis connected")
+
+	if err = settings.HeadBucketCache.SetString(conf.HeadBucketCache); err != nil {
+		return err
+	}
 
 	verSvc := meta.NewVersionService(appRedis)
 	storageSvc := storage.New(appRedis)

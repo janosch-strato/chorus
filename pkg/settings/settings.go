@@ -29,5 +29,5 @@ import "github.com/clyso/chorus/pkg/switches"
 
 // All returns every switch, so that the api needs no list of its own.
 func All() []switches.Switch {
-	return []switches.Switch{ListingSpeed}
+	return []switches.Switch{ListingSpeed, HeadBucketCache}
 }
