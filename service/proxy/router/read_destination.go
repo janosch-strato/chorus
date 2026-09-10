@@ -39,7 +39,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -235,9 +238,56 @@ func (r *router) objectDeleted(ctx context.Context, source, object string) {
 	}
 }
 
+var errDestinationSlow = errors.New("destination storage did not begin to answer in time")
+
+// ResponseHeaderTimeout would do this on the transport, but that one is shared
+// with the replication traffic.
+func withAnswerTimeout(ctx context.Context, timeout time.Duration) (context.Context, *answerGuard) {
+	g := &answerGuard{}
+	if timeout <= 0 {
+		return ctx, g
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	timer := time.AfterFunc(timeout, func() {
+		if g.expire() {
+			cancel()
+		}
+	})
+	return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GotFirstResponseByte: func() {
+			// Stop does not wait for a callback already running.
+			timer.Stop()
+			g.answered()
+		},
+	}), g
+}
+
+// Answered and given up on can happen at once; only the first may take effect.
+type answerGuard struct {
+	settled atomic.Bool
+	expired atomic.Bool
+}
+
+func (g *answerGuard) answered() bool {
+	return g.settled.CompareAndSwap(false, true)
+}
+
+func (g *answerGuard) expire() bool {
+	if !g.settled.CompareAndSwap(false, true) {
+		return false
+	}
+	g.expired.Store(true)
+	return true
+}
+
+func (g *answerGuard) ranOut() bool {
+	return g.expired.Load()
+}
+
 // readDestination sends the read request to the destination storage. The
 // request is restored to its original form before returning so that the caller
 // can retry it on the source storage.
+// TODO: If the destination read times out persistently, disable read-from-destination for a while.
 func (r *router) readDestination(req *http.Request, destStorage, destBucket string) (resp *http.Response, isApiErr bool, err error) {
 	ctx := xctx.SetStorage(req.Context(), destStorage)
 	client, err := r.clients.GetByName(ctx, destStorage)
@@ -251,7 +301,9 @@ func (r *router) readDestination(req *http.Request, destStorage, destBucket stri
 	defer func() {
 		*req.URL = origURL
 	}()
-	destReq := req.WithContext(ctx)
+	answerCtx, guard := withAnswerTimeout(ctx,
+		time.Duration(settings.DestinationAnswerTimeout.Get())*time.Millisecond)
+	destReq := req.WithContext(answerCtx)
 	if err = rewriteBucket(destReq, xctx.GetBucket(ctx), destBucket); err != nil {
 		return nil, false, err
 	}
@@ -260,7 +312,19 @@ func (r *router) readDestination(req *http.Request, destStorage, destBucket stri
 		_ = r.limit.StorReq(ctx, client.Name()) //todo: refactor rate-limiting
 	}
 	resp, isApiErr, err = client.Do(destReq)
-	if err == nil && !isApiErr {
+	switch {
+	case guard.ranOut():
+		// Asked before the answer: a read that was given up on must not be
+		// reported as one that arrived, whatever came back afterwards. Its
+		// context is cancelled, so its body would fail halfway through the
+		// caller forwarding it. The client is still there, only the
+		// destination is not answering, which the caller tells apart to read
+		// from the source instead.
+		metrics.ProxyDestinationReadTimeout(destStorage)
+		// Join rather than a wrapping format: err is nil when the wait ran
+		// out and an answer turned up all the same.
+		err = errors.Join(errDestinationSlow, err)
+	case err == nil && !isApiErr:
 		metrics.ProxyDestinationRead(destStorage)
 	}
 	return resp, isApiErr, err

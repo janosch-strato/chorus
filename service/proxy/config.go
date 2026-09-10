@@ -21,6 +21,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"time"
 
 	"github.com/clyso/chorus/pkg/config"
 	"github.com/clyso/chorus/pkg/s3"
@@ -60,7 +61,16 @@ type Config struct {
 	// for objects the migration has already copied. Meant for migrations away
 	// from a storage that is too slow to read from.
 	ReadFromDestination bool `yaml:"readFromDestination"`
+	// DestinationAnswerTimeout is how long such a read waits for the
+	// destination storage to answer it, connecting included, before it is
+	// read from the source storage instead. Reading the answer itself is not
+	// bounded by it. A negative value turns it off.
+	DestinationAnswerTimeout time.Duration `yaml:"destinationAnswerTimeout"`
 }
+
+// A destination slower than this is not the faster storage the read went to
+// it for.
+const defaultDestinationAnswerTimeout = time.Second * 5
 
 func (c *Config) Validate() error {
 	if err := c.Common.Validate(); err != nil {
@@ -94,6 +104,10 @@ func (c *Config) Validate() error {
 	}
 	if c.Auth.UseStorage == "" && len(c.Auth.Custom) == 0 {
 		return fmt.Errorf("proxy config: auth credentials enabled but not set")
+	}
+
+	if c.DestinationAnswerTimeout == 0 {
+		c.DestinationAnswerTimeout = defaultDestinationAnswerTimeout
 	}
 
 	if c.Port <= 0 {

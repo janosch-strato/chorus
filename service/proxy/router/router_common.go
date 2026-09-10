@@ -57,11 +57,10 @@ func (r *router) commonRead(req *http.Request) (resp *http.Response, storage str
 		if err == nil && !isApiErr {
 			return resp, destStorage, false, nil
 		}
-		if resp != nil {
+		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
 		}
-		// The destination did not fail, the client left, and reading from the
-		// source would only repeat what is already over.
+		// The destination did not fail, the client left.
 		if errors.Is(ctx.Err(), context.Canceled) {
 			zerolog.Ctx(ctx).Info().Err(err).Str("destination_storage", destStorage).
 				Msg("read from destination given up with the client")
