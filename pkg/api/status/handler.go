@@ -33,6 +33,8 @@ import (
 	"github.com/clyso/chorus/pkg/dom"
 	"github.com/clyso/chorus/pkg/entity"
 	"github.com/clyso/chorus/pkg/policy"
+	"github.com/clyso/chorus/pkg/settings"
+	"github.com/clyso/chorus/pkg/switches"
 	"github.com/clyso/chorus/pkg/tasks"
 	pb "github.com/clyso/chorus/proto/gen/go/chorus"
 )
@@ -193,11 +195,13 @@ func Handler(conf Config, logger zerolog.Logger, cSrv pb.ChorusServer, pSvc poli
 		srv.HandleFunc(failedTasksPattern, func(w http.ResponseWriter, r *http.Request) {
 			handleMaintFailedTasks(logger, qSvc, pSvc, r.PathValue("bucket"), w, r)
 		})
-		listingSpeedPattern := fmt.Sprintf("/%s/listing-speed", maintPrefix)
-		logger.Info().Str("listingSpeedPath", listingSpeedPattern).Msg("setting up listing speed api")
-		srv.HandleFunc(listingSpeedPattern, func(w http.ResponseWriter, r *http.Request) {
-			handleListingSpeed(logger, w, r)
-		})
+		for _, sw := range settings.All() {
+			pattern := fmt.Sprintf("/%s/%s", maintPrefix, sw.Name())
+			logger.Info().Str("switchPath", pattern).Msg("setting up switch api")
+			srv.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+				handleSwitch(logger, sw, w, r)
+			})
+		}
 		srv.HandleFunc(migStatusPattern, func(w http.ResponseWriter, r *http.Request) {
 			handleMaintMigStatus(logger, cSrv, pSvc, checkInterval, r.PathValue("bucket"),
 				lockRcloneBucket, unlockRcloneBucket, lockChorusBucket, unlockChorusBucket, w, r)
@@ -598,40 +602,41 @@ func handleMaintMigStatus(logger zerolog.Logger, cSrv pb.ChorusServer, pSvc poli
 	}
 }
 
-type listingSpeedResponse struct {
-	Speed string `json:"listing_speed"`
-	Error string `json:"error,omitempty"`
+type switchResponse struct {
+	Switch string `json:"switch"`
+	Value  string `json:"value"`
+	Error  string `json:"error,omitempty"`
 }
 
-// handleListingSpeed reports the bucket listing speed of this instance, and
-// changes it on PUT. The change lasts until the next restart, which applies
-// the configured speed again.
-func handleListingSpeed(logger zerolog.Logger, w http.ResponseWriter, r *http.Request) {
-	write := func(code int, rsp listingSpeedResponse) {
+// handleSwitch reports the value of a switch and changes it on PUT. The change
+// lasts until the next restart, which applies the configured value again.
+func handleSwitch(logger zerolog.Logger, sw switches.Switch, w http.ResponseWriter, r *http.Request) {
+	write := func(code int, rsp switchResponse) {
+		rsp.Switch = sw.Name()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
 		if err := json.NewEncoder(w).Encode(rsp); err != nil {
-			logger.Error().Err(err).Msg("failed to encode listing speed response")
+			logger.Error().Err(err).Msg("failed to encode switch response")
 		}
 	}
 	switch r.Method {
 	case http.MethodGet:
-		write(http.StatusOK, listingSpeedResponse{Speed: tasks.GetListingSpeed()})
+		write(http.StatusOK, switchResponse{Value: sw.GetString()})
 	case http.MethodPut, http.MethodPost:
-		speed := strings.TrimSpace(r.URL.Query().Get("speed"))
-		if err := tasks.SetListingSpeed(speed); err != nil || speed == "" {
-			write(http.StatusBadRequest, listingSpeedResponse{
-				Speed: tasks.GetListingSpeed(),
-				Error: fmt.Sprintf("speed query parameter must be %s or %s", tasks.ListingFull, tasks.ListingAuto),
+		value := strings.TrimSpace(r.URL.Query().Get("value"))
+		if err := sw.SetString(value); err != nil {
+			write(http.StatusBadRequest, switchResponse{
+				Value: sw.GetString(),
+				Error: fmt.Sprintf("value must be one of %s", sw.Syntax()),
 			})
 			return
 		}
-		logger.Info().Str("listing_speed", speed).Msg("bucket listing speed changed")
-		write(http.StatusOK, listingSpeedResponse{Speed: tasks.GetListingSpeed()})
+		logger.Info().Str("switch", sw.Name()).Str("value", sw.GetString()).Msg("switch changed")
+		write(http.StatusOK, switchResponse{Value: sw.GetString()})
 	default:
-		write(http.StatusMethodNotAllowed, listingSpeedResponse{
-			Speed: tasks.GetListingSpeed(),
-			Error: "use GET to read and PUT to change the listing speed",
+		write(http.StatusMethodNotAllowed, switchResponse{
+			Value: sw.GetString(),
+			Error: "use GET to read and PUT to change a switch",
 		})
 	}
 }
