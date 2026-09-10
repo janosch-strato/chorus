@@ -166,6 +166,9 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	if err = settings.ListingSpeed.SetString(conf.Worker.ListingSpeed); err != nil {
 		return err
 	}
+	if err = settings.ReadFromDestination.Set(conf.Worker.ReadFromDestination); err != nil {
+		return err
+	}
 	logger.Info().Str("listing_speed", settings.ListingSpeed.GetString()).Msg("bucket listing speed")
 
 	workerSvc := handler.New(conf.Worker, s3Clients, versionSvc, policySvc, storageSvc, rc, taskClient, queueSvc, limiter, objectLocker, bucketLocker, replicationStatusLocker)

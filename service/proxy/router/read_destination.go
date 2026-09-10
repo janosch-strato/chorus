@@ -52,6 +52,7 @@ import (
 	"github.com/clyso/chorus/pkg/meta"
 	"github.com/clyso/chorus/pkg/metrics"
 	"github.com/clyso/chorus/pkg/s3"
+	"github.com/clyso/chorus/pkg/settings"
 	"github.com/clyso/chorus/pkg/tasks"
 )
 
@@ -80,7 +81,7 @@ const (
 // destination storage and bucket to use. A switch in progress owns the routing
 // of the bucket and is left alone.
 func (r *router) destinationReadRoute(req *http.Request, source, user, bucket string, switchInProgress bool) (destStorage, destBucket string, ok bool) {
-	if !r.readFromDestination {
+	if !settings.ReadFromDestination.Get() {
 		return "", "", false
 	}
 	destStorage, destBucket, reason := r.destinationReadDecision(req, source, user, bucket, switchInProgress)
@@ -205,7 +206,7 @@ func migrationCopyTask(source, user, bucket, object string, dest entity.Replicat
 // the source storage. Dropping the record also allows the object to be copied
 // again should it reappear.
 func (r *router) dropMigratedRecord(ctx context.Context, source, object string) {
-	if !r.readFromDestination {
+	if !settings.ReadFromDestination.Get() {
 		return
 	}
 	user, bucket := xctx.GetUser(ctx), xctx.GetBucket(ctx)

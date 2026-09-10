@@ -92,6 +92,9 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	appRedis.AddHook(util.TimingHook{})
 	logger.Info().Msg("app redis connected")
 
+	if err = settings.ReadFromDestination.Set(conf.ReadFromDestination); err != nil {
+		return err
+	}
 	if err = settings.HeadBucketCache.SetString(conf.HeadBucketCache); err != nil {
 		return err
 	}
@@ -123,7 +126,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	}
 	logger.Info().Msg("s3 clients connected")
 
-	routeSvc := router.NewRouter(s3Clients, taskClient, verSvc, policySvc, storageSvc, queueSvc, limiter, conf.ReadFromDestination)
+	routeSvc := router.NewRouter(s3Clients, taskClient, verSvc, policySvc, storageSvc, queueSvc, limiter)
 	replSvc := replication.New(taskClient, verSvc, policySvc)
 	handler := router.Serve(routeSvc, replSvc)
 	handler = auth.Middleware(conf.Auth, conf.Storage.Storages).Wrap(handler)
