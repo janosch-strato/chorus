@@ -45,17 +45,15 @@ func NewRouter(
 	policySvc policy.Service,
 	storageSvc storage.Service,
 	queueSvc tasks.QueueService,
-	limit ratelimit.RPM,
-	readFromDestination bool) Router {
+	limit ratelimit.RPM) Router {
 	return &router{
-		clients:             clients,
-		taskClient:          taskClient,
-		versionSvc:          versionSvc,
-		policySvc:           policySvc,
-		storageSvc:          storageSvc,
-		queueSvc:            queueSvc,
-		limit:               limit,
-		readFromDestination: readFromDestination,
+		clients:    clients,
+		taskClient: taskClient,
+		versionSvc: versionSvc,
+		policySvc:  policySvc,
+		storageSvc: storageSvc,
+		queueSvc:   queueSvc,
+		limit:      limit,
 	}
 }
 
@@ -67,10 +65,6 @@ type router struct {
 	storageSvc storage.Service
 	queueSvc   tasks.QueueService
 	limit      ratelimit.RPM
-	// readFromDestination serves reads of already migrated objects from the
-	// replication destination, see read_destination.go. It also enables the
-	// cache of bucket existence checks, see head_bucket_cache.go.
-	readFromDestination bool
 }
 
 func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks.SyncTask, storage string, isApiErr bool, err error) {

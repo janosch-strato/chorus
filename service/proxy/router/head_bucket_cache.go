@@ -72,7 +72,7 @@ func remember(user, bucket string, header http.Header) {
 // headBucket answers a bucket existence check from the cache if it holds one,
 // and remembers the answer of the storage otherwise.
 func (r *router) headBucket(req *http.Request) (resp *http.Response, storage string, isApiErr bool, err error) {
-	if !r.readFromDestination || !settings.HeadBucketCache.Get() {
+	if !settings.ReadFromDestination.Get() || !settings.HeadBucketCache.Get() {
 		return r.commonRead(req)
 	}
 	ctx := req.Context()
