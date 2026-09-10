@@ -37,6 +37,14 @@ var destinationReadFallbacks = promauto.NewCounterVec(
 	[]string{"storage"},
 )
 
+var destinationReadTimeouts = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "proxy_destination_read_timeouts_total",
+		Help: "Number of reads given up on because the replication destination did not answer them within the configured wait.",
+	},
+	[]string{"storage"},
+)
+
 var destinationReadsSkipped = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "proxy_destination_reads_skipped_total",
@@ -74,6 +82,12 @@ func ProxyDestinationRead(storage string) {
 // not answer and that was retried on the source storage.
 func ProxyDestinationReadFallback(storage string) {
 	destinationReadFallbacks.WithLabelValues(storage).Inc()
+}
+
+// ProxyDestinationReadTimeout counts the fallbacks owed to a destination that
+// did not answer, as against one that answered with an error.
+func ProxyDestinationReadTimeout(storage string) {
+	destinationReadTimeouts.WithLabelValues(storage).Inc()
 }
 
 // ProxyDestinationReadSkipped counts a read that stayed on the source storage

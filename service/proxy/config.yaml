@@ -2,6 +2,7 @@ address: "http://localhost:9669" # Chorus proxy s3 api address
 port: 9669
 headBucketCache: enabled # answer a bucket existence check from the answer of the first one
 readFromDestination: false # serve reads of already migrated objects from the replication destination instead of the source storage
+destinationAnswerTimeout: 5s # how long such a read waits for the destination storage to answer, connecting to it included, before it is read from the source storage instead. reading the answer itself is not bounded by it. negative turns it off
 cors:
   enabled: false
   allowAll: false

@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/hibiken/asynq"
 
@@ -45,14 +46,16 @@ func NewRouter(
 	versionSvc meta.VersionService,
 	policySvc policy.Service,
 	storageSvc storage.Service,
-	limit ratelimit.RPM) Router {
+	limit ratelimit.RPM,
+	destinationAnswerTimeout time.Duration) Router {
 	return &router{
-		clients:    clients,
-		taskClient: taskClient,
-		versionSvc: versionSvc,
-		policySvc:  policySvc,
-		storageSvc: storageSvc,
-		limit:      limit,
+		clients:                  clients,
+		taskClient:               taskClient,
+		versionSvc:               versionSvc,
+		policySvc:                policySvc,
+		storageSvc:               storageSvc,
+		limit:                    limit,
+		destinationAnswerTimeout: destinationAnswerTimeout,
 	}
 }
 
@@ -63,6 +66,8 @@ type router struct {
 	policySvc  policy.Service
 	storageSvc storage.Service
 	limit      ratelimit.RPM
+	// destinationAnswerTimeout, see withAnswerTimeout.
+	destinationAnswerTimeout time.Duration
 }
 
 func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks.SyncTask, storage string, isApiErr bool, err error) {

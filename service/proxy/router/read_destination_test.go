@@ -18,8 +18,13 @@ package router
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -358,4 +363,219 @@ func Test_router_adjustObjReadRoute_reportsSwitchInProgress(t *testing.T) {
 	r.NoError(err)
 	r.Equal(testSource, storage)
 	r.True(switchInProgress)
+}
+
+func TestWithAnswerTimeout(t *testing.T) {
+	t.Run("A storage that does not begin to answer is given up on", func(t *testing.T) {
+		r := require.New(t)
+
+		answering := make(chan struct{})
+		unblock := make(chan struct{})
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			close(answering)
+			<-unblock // a destination storage that took the read and is silent
+			w.WriteHeader(http.StatusOK)
+		}))
+		t.Cleanup(srv.Close)
+		t.Cleanup(func() { close(unblock) })
+
+		ctx, guard := withAnswerTimeout(t.Context(), 200*time.Millisecond)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/buck/obj", nil)
+		r.NoError(err)
+
+		start := time.Now()
+		resp, err := srv.Client().Do(req) //nolint:bodyclose // there is no response
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		<-answering
+		r.ErrorIs(err, context.Canceled)
+		r.True(guard.ranOut(), "the read was not given up on for want of an answer")
+		r.Less(time.Since(start), 5*time.Second, "the read waited longer than the timeout")
+	})
+
+	t.Run("A storage that answers keeps the connection for the answer", func(t *testing.T) {
+		r := require.New(t)
+
+		body := make(chan struct{})
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			<-body
+			_, _ = w.Write([]byte("object"))
+		}))
+		t.Cleanup(srv.Close)
+
+		ctx, guard := withAnswerTimeout(t.Context(), 200*time.Millisecond)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/buck/obj", nil)
+		r.NoError(err)
+
+		resp, err := srv.Client().Do(req)
+		r.NoError(err)
+		defer resp.Body.Close()
+
+		time.AfterFunc(500*time.Millisecond, func() { close(body) })
+		read, err := io.ReadAll(resp.Body)
+		r.NoError(err, "reading the answer ran into the timeout")
+		r.EqualValues("object", string(read))
+		r.False(guard.ranOut())
+	})
+
+	t.Run("Getting a connection is part of the wait", func(t *testing.T) {
+		r := require.New(t)
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		t.Cleanup(srv.Close)
+
+		ctx, guard := withAnswerTimeout(t.Context(), 50*time.Millisecond)
+		// As it would while the connection is still being established.
+		time.Sleep(100 * time.Millisecond)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/buck/obj", nil)
+		r.NoError(err)
+
+		resp, err := srv.Client().Do(req) //nolint:bodyclose // there is no response
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		r.ErrorIs(err, context.Canceled)
+		r.True(guard.ranOut())
+	})
+
+	t.Run("A timeout that is off waits as any other read", func(t *testing.T) {
+		r := require.New(t)
+
+		for _, timeout := range []time.Duration{0, -1} {
+			ctx, guard := withAnswerTimeout(t.Context(), timeout)
+			r.Nil(httptrace.ContextClientTrace(ctx), "an unbounded read needs no hooks")
+			r.False(guard.ranOut())
+		}
+	})
+
+	t.Run("An answer and the wait running out cannot both take effect", func(t *testing.T) {
+		r := require.New(t)
+
+		answeredFirst := &answerGuard{}
+		r.True(answeredFirst.answered())
+		r.False(answeredFirst.expire(), "the wait took away an answer that had arrived")
+		r.False(answeredFirst.ranOut())
+
+		expiredFirst := &answerGuard{}
+		r.True(expiredFirst.expire())
+		r.False(expiredFirst.answered(), "an answer overrode a read already given up on")
+		r.True(expiredFirst.ranOut())
+	})
+
+	t.Run("A read that was answered is not cancelled by its own wait", func(t *testing.T) {
+		r := require.New(t)
+
+		ctx, guard := withAnswerTimeout(context.Background(), 50*time.Millisecond)
+		httptrace.ContextClientTrace(ctx).GotFirstResponseByte()
+
+		time.Sleep(200 * time.Millisecond)
+		r.NoError(ctx.Err(), "the answer was cancelled after it had arrived")
+		r.False(guard.ranOut())
+	})
+
+	// What must never happen is both winning.
+	t.Run("An answer racing the wait settles on one of the two", func(t *testing.T) {
+		r := require.New(t)
+
+		for range 300 {
+			ctx, guard := withAnswerTimeout(context.Background(), time.Millisecond)
+			trace := httptrace.ContextClientTrace(ctx)
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				time.Sleep(time.Millisecond)
+				trace.GotFirstResponseByte()
+			}()
+			wg.Wait()
+			time.Sleep(2 * time.Millisecond) // let a cancel that won land
+
+			if !guard.ranOut() {
+				r.NoError(ctx.Err(), "a read that was not given up on was cancelled anyway")
+			}
+		}
+	})
+
+	t.Run("A read that is given up on names the destination storage", func(t *testing.T) {
+		r := require.New(t)
+
+		err := fmt.Errorf("%w: %w", errDestinationSlow, context.Canceled)
+		r.ErrorIs(err, errDestinationSlow)
+		r.ErrorIs(err, context.Canceled)
+	})
+}
+
+// The wait runs out and the destination answers all the same: the fake storage
+// ignores the context, which makes that race repeatable.
+func TestReadDestinationGivenUpOn(t *testing.T) {
+	r := require.New(t)
+
+	answered := make(chan struct{})
+	rt := &router{
+		destinationAnswerTimeout: 20 * time.Millisecond,
+		clients: fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
+			time.Sleep(100 * time.Millisecond)
+			close(answered)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("late")),
+				Header:     http.Header{},
+			}, false, nil
+		}}},
+	}
+
+	// HeadObject: only GetObject consults the rate limiter.
+	req := readReq(s3.HeadObject, "obj", "/"+testBucket+"/obj")
+	resp, isApiErr, err := rt.readDestination(req, testDest, testBucket)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+
+	<-answered
+	r.False(isApiErr)
+	r.ErrorIs(err, errDestinationSlow, "a read that was given up on was reported as answered")
+}
+
+// The storage clients never return one, but the proxy builds them itself, see
+// the head bucket cache.
+func TestCommonReadFallsBackOnABodilessAnswer(t *testing.T) {
+	r := require.New(t)
+	ctx := t.Context()
+
+	c := testutil.SetupRedis(t)
+	policySvc := policy.NewService(c, nil, nil)
+	r.NoError(policySvc.AddBucketRoutingPolicy(ctx,
+		entity.NewBucketRoutingPolicyID(testUser, testBucket), testSource, false))
+	replID := entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket)
+	_, err := policySvc.AddBucketReplicationPolicy(ctx, replID, nil)
+	r.NoError(err)
+	r.NoError(policySvc.ListingDone(ctx, replID))
+
+	storageSvc := storage.New(c)
+	setMigrated(t, storageSvc, "obj") // so the destination is asked at all
+	r.NoError(settings.ReadFromDestination.Set(true))
+	t.Cleanup(func() { r.NoError(settings.ReadFromDestination.Set(false)) })
+
+	var asked int
+	rt := &router{
+		clients: fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
+			asked++
+			// An api error, so the caller discards it - and no body to discard.
+			return &http.Response{StatusCode: http.StatusNotFound, Header: http.Header{}}, true, nil
+		}}},
+		policySvc:  policySvc,
+		versionSvc: meta.NewVersionService(c),
+		storageSvc: storageSvc,
+	}
+
+	r.NotPanics(func() {
+		_, _, _, _ = rt.commonRead(readReq(s3.HeadObject, "obj", "/"+testBucket+"/obj"))
+	}, "an answer without a body was reached into on the way to the source")
+	r.Equal(2, asked, "the read did not fall back to the source storage")
 }
