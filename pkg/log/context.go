@@ -91,31 +91,3 @@ func WithUser(ctx context.Context, u string) context.Context {
 	})
 	return xctx.SetUser(ctx, u)
 }
-
-func StartNew(from context.Context) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(context.Background())
-	ctx = zerolog.Ctx(from).WithContext(ctx)
-
-	if u := xctx.GetUser(from); u != "" {
-		ctx = xctx.SetUser(ctx, u)
-	}
-	if s := xctx.GetStorage(from); s != "" {
-		ctx = xctx.SetStorage(ctx, s)
-	}
-	if b := xctx.GetBucket(from); b != "" {
-		ctx = xctx.SetBucket(ctx, b)
-	}
-	if f := xctx.GetFlow(from); f != "" {
-		ctx = xctx.SetFlow(ctx, f)
-	}
-	if m := xctx.GetMethod(from); m != s3.UndefinedMethod {
-		ctx = xctx.SetMethod(ctx, m)
-	}
-	if o := xctx.GetObject(from); o != "" {
-		ctx = xctx.SetObject(ctx, o)
-	}
-	if t := xctx.GetTraceID(from); t != "" {
-		ctx = xctx.SetTraceID(ctx, t)
-	}
-	return ctx, cancel
-}
