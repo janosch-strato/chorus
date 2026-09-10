@@ -213,6 +213,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, flushRedis bool) 
 			Address:             conf.Proxy.Address,
 			Storage:             conf.Storage,
 			Cors:                conf.Proxy.Cors,
+			HeadBucketCache:     conf.Proxy.HeadBucketCache,
 			ReadFromDestination: conf.Proxy.ReadFromDestination,
 		}
 		if len(proxyConf.Redis.Addresses) == 0 {
