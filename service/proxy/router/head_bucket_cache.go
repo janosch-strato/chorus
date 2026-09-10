@@ -38,11 +38,11 @@ package router
 
 import (
 	"net/http"
-	"sync"
 	"time"
 
 	xctx "github.com/clyso/chorus/pkg/ctx"
 	"github.com/clyso/chorus/pkg/metrics"
+	"github.com/clyso/chorus/pkg/settings"
 )
 
 // storageCache is reported as the storage of a request that no storage saw.
@@ -56,32 +56,9 @@ var headerNotReplayed = map[string]struct{}{
 	"X-Amz-Id-2":       {},
 }
 
-// headBucketCache holds the answer of a bucket existence check per user and
-// bucket. HEAD answers carry no body, so an entry is a handful of headers.
-type headBucketCache struct {
-	mu      sync.RWMutex
-	answers map[string]http.Header
-}
-
-func newHeadBucketCache() *headBucketCache {
-	return &headBucketCache{answers: map[string]http.Header{}}
-}
-
-func headBucketKey(user, bucket string) string {
-	// The answer depends on the credentials the request is made with, which
-	// the proxy derives from the user.
-	return user + ":" + bucket
-}
-
-// get returns the headers of a remembered check, or nil if there is none.
-func (c *headBucketCache) get(user, bucket string) http.Header {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.answers[headBucketKey(user, bucket)]
-}
-
-// put remembers the headers of a successful check.
-func (c *headBucketCache) put(user, bucket string, header http.Header) {
+// remember stores what the storage answered, without the headers that were
+// true of that one request only.
+func remember(user, bucket string, header http.Header) {
 	keep := make(http.Header, len(header))
 	for name, values := range header {
 		if _, skip := headerNotReplayed[name]; skip {
@@ -89,20 +66,18 @@ func (c *headBucketCache) put(user, bucket string, header http.Header) {
 		}
 		keep[name] = values
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.answers[headBucketKey(user, bucket)] = keep
+	settings.HeadBucketResponse.Put(user, bucket, keep)
 }
 
 // headBucket answers a bucket existence check from the cache if it holds one,
 // and remembers the answer of the storage otherwise.
 func (r *router) headBucket(req *http.Request) (resp *http.Response, storage string, isApiErr bool, err error) {
-	if !r.readFromDestination || r.headCache == nil {
+	if !r.readFromDestination || !settings.HeadBucketCache.Get() {
 		return r.commonRead(req)
 	}
 	ctx := req.Context()
 	user, bucket := xctx.GetUser(ctx), xctx.GetBucket(ctx)
-	if cached := r.headCache.get(user, bucket); cached != nil {
+	if cached := settings.HeadBucketResponse.Get(user, bucket); cached != nil {
 		metrics.ProxyHeadBucketCache(metrics.CacheHit)
 		header := cached.Clone()
 		header.Set("Date", time.Now().UTC().Format(http.TimeFormat))
@@ -117,7 +92,7 @@ func (r *router) headBucket(req *http.Request) (resp *http.Response, storage str
 
 	resp, storage, isApiErr, err = r.commonRead(req)
 	if err == nil && !isApiErr && resp != nil && resp.StatusCode == http.StatusOK {
-		r.headCache.put(user, bucket, resp.Header)
+		remember(user, bucket, resp.Header)
 	}
 	return resp, storage, isApiErr, err
 }

@@ -56,7 +56,6 @@ func NewRouter(
 		queueSvc:            queueSvc,
 		limit:               limit,
 		readFromDestination: readFromDestination,
-		headCache:           newHeadBucketCache(),
 	}
 }
 
@@ -72,7 +71,6 @@ type router struct {
 	// replication destination, see read_destination.go. It also enables the
 	// cache of bucket existence checks, see head_bucket_cache.go.
 	readFromDestination bool
-	headCache           *headBucketCache
 }
 
 func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks.SyncTask, storage string, isApiErr bool, err error) {
