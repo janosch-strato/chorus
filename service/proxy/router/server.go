@@ -17,6 +17,7 @@
 package router
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"sync/atomic"
@@ -71,8 +72,7 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 			zerolog.Ctx(ctx).Info().Err(err).Msg("s3 api error returned")
 			// create replication tasks according to replication rules
 		} else {
-			replCtx, cancel := log.StartNew(ctx)
-			defer cancel()
+			replCtx := context.WithoutCancel(ctx)
 			enqueueStart := time.Now()
 			for _, task := range taskList {
 				replErr := replSvc.Replicate(replCtx, task)
