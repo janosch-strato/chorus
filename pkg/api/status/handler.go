@@ -237,7 +237,7 @@ func taskInfoToFailedTask(t *asynq.TaskInfo) (*failedTask, error) {
 		ts := t.LastFailedAt.UTC()
 		ft.LastFailedAt = &ts
 	}
-	info, err := tasks.ParseTaskObjectInfo(t.Type, t.Payload)
+	info, err := tasks.ParseTaskObjectInfo(t)
 	if err != nil {
 		return nil, err
 	}
