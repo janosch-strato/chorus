@@ -125,15 +125,9 @@ func (s *svc) HandleMigrationBucketListObj(ctx context.Context, t *asynq.Task) e
 			}
 		} else {
 			task, err = tasks.NewReplicationTask(ctx, replicationID, tasks.MigrateObjCopyPayload{
-				Sync:   p.Sync,
-				Bucket: p.Bucket,
-				Obj: tasks.ObjPayload{
-					Name:        object.Key,
-					VersionID:   object.VersionID,
-					ETag:        object.ETag,
-					Size:        object.Size,
-					ContentType: object.ContentType,
-				},
+				Name:      object.Key,
+				VersionID: object.VersionID,
+				Size:      object.Size,
 			})
 			if err != nil {
 				return fmt.Errorf("migration bucket list obj: unable to create copy obj task: %w", err)

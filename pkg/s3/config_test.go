@@ -49,6 +49,23 @@ func TestStorageConfig_Validate(t *testing.T) {
 	r.EqualValues(len(fol), len(res1)-1)
 }
 
+func TestStorageConfig_ValidateIdentifiers(t *testing.T) {
+	r := require.New(t)
+	s := StorageConfig{
+		Storages: map[string]Storage{
+			"a:b": {IsMain: true, Address: NewConfAddr("a"), Provider: "p", Credentials: map[string]CredentialsV4{"user": {"1", "2"}}},
+		},
+	}
+	r.Error(s.Init(), "storage name must not contain ':'")
+
+	s = StorageConfig{
+		Storages: map[string]Storage{
+			"a": {IsMain: true, Address: NewConfAddr("a"), Provider: "p", Credentials: map[string]CredentialsV4{"us:er": {"1", "2"}}},
+		},
+	}
+	r.Error(s.Init(), "user name must not contain ':'")
+}
+
 func TestStorageConfig_ValidateAddress(t *testing.T) {
 	t.Run("Add http", func(t *testing.T) {
 		r := require.New(t)
