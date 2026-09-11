@@ -94,11 +94,14 @@ func Test_migrate_obj_copy_task_is_retained(t *testing.T) {
 	// by the worker, see storage.SetMigratedObj
 	r.Zero(info.Retention)
 	r.EqualValues(MigrateObjCopyQueue(replicationID), info.Queue)
-	r.EqualValues(MigrateObjCopyTaskID("src", "dst", "buck", "dst-buck", "dir/obj", ""), info.ID)
+	r.EqualValues(MigrateObjCopyTaskID("dir/obj", ""), info.ID)
 }
 
 func Test_MigrateObjCopyTaskID(t *testing.T) {
 	r := require.New(t)
-	r.EqualValues("mgr:co:src:dst:buck:dst-buck:obj", MigrateObjCopyTaskID("src", "dst", "buck", "dst-buck", "obj", ""))
-	r.EqualValues("mgr:co:src:dst:buck:dst-buck:obj:v1", MigrateObjCopyTaskID("src", "dst", "buck", "dst-buck", "obj", "v1"))
+	r.EqualValues("o:obj", MigrateObjCopyTaskID("obj", ""))
+	r.EqualValues("o:obj:v1", MigrateObjCopyTaskID("obj", "v1"))
+	// an object may be named like anything, the prefix still tells the two
+	// kinds of task sharing the copy queue apart
+	r.NotEqual(copyVersionedIDPrefix+"pre", MigrateObjCopyTaskID(copyVersionedIDPrefix+"pre", ""))
 }

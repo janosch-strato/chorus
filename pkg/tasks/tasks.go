@@ -99,11 +99,18 @@ func MigrateObjCopyQueue(id entity.ReplicationStatusID) string {
 	return replicationQueueName(QueueMigrateCopyObjectPrefix, id)
 }
 
+// The copy queue holds two kinds of task, both contain the object name
+// (unversioned) or prefix (versioned) and these constants keep their ids apart.
+const (
+	copyObjectIDPrefix    = "o:"
+	copyVersionedIDPrefix = "v:"
+)
+
 // MigrateObjCopyTaskID returns the task id of the object copy task for the
 // given object. The id is deterministic so that the task can be looked up
 // without knowing anything but the object itself.
-func MigrateObjCopyTaskID(fromStorage, toStorage, bucket, toBucket, object, versionID string) string {
-	id := fmt.Sprintf("mgr:co:%s:%s:%s:%s:%s", fromStorage, toStorage, bucket, toBucket, object)
+func MigrateObjCopyTaskID(object, versionID string) string {
+	id := copyObjectIDPrefix + object
 	if versionID != "" {
 		id += ":" + versionID
 	}
@@ -356,12 +363,12 @@ func NewReplicationTask[T ReplicationTask](ctx context.Context, replicationID en
 		optionList = []asynq.Option{asynq.Queue(queue), asynq.TaskID(id)}
 		taskType = TypeMigrateBucketListObjects
 	case MigrateObjCopyPayload:
-		id := MigrateObjCopyTaskID(p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket, p.Obj.Name, p.Obj.VersionID)
+		id := MigrateObjCopyTaskID(p.Obj.Name, p.Obj.VersionID)
 		queue := MigrateObjCopyQueue(replicationID)
 		optionList = []asynq.Option{asynq.Queue(queue), asynq.TaskID(id)}
 		taskType = TypeMigrateObjCopy
 	case MigrateVersionedObjectPayload:
-		id := fmt.Sprintf("mgr:cov:%s:%s:%s:%s", p.FromStorage, p.ToStorage, p.Bucket, p.Prefix)
+		id := copyVersionedIDPrefix + p.Prefix
 		queue := replicationQueueName(QueueMigrateCopyObjectPrefix, replicationID)
 		optionList = []asynq.Option{asynq.Queue(queue), asynq.TaskID(id)}
 		taskType = TypeMigrateVersionedObject
