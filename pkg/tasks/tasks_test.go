@@ -80,11 +80,7 @@ func Test_migrate_obj_copy_task_is_retained(t *testing.T) {
 	t.Cleanup(func() { client.Close() })
 
 	replicationID := entity.NewReplicationStatusID("user", "src", "buck", "dst", "dst-buck")
-	payload := MigrateObjCopyPayload{
-		Sync:   Sync{FromStorage: "src", ToStorage: "dst", ToBucket: "dst-buck"},
-		Bucket: "buck",
-		Obj:    ObjPayload{Name: "dir/obj"},
-	}
+	payload := MigrateObjCopyPayload{Name: "dir/obj", Size: 42}
 	task, err := NewReplicationTask(ctx, replicationID, payload)
 	r.NoError(err)
 
@@ -95,12 +91,27 @@ func Test_migrate_obj_copy_task_is_retained(t *testing.T) {
 	r.Zero(info.Retention)
 	r.EqualValues(MigrateObjCopyQueue(replicationID), info.Queue)
 	r.EqualValues(MigrateObjCopyTaskID("dir/obj", ""), info.ID)
+	// the replication and the object are in the queue name and in the task
+	// id, so the payload carries neither
+	r.JSONEq(`{"Size":42}`, string(info.Payload))
+	gotID, ok := ReplicationFromQueue(info.Queue)
+	r.True(ok)
+	r.EqualValues(replicationID, gotID)
+	object, versionID, ok := ObjectFromCopyTaskID(info.ID)
+	r.True(ok)
+	r.EqualValues("dir/obj", object)
+	r.Empty(versionID)
 }
 
 func Test_MigrateObjCopyTaskID(t *testing.T) {
 	r := require.New(t)
-	r.EqualValues("o:obj", MigrateObjCopyTaskID("obj", ""))
-	r.EqualValues("o:obj:v1", MigrateObjCopyTaskID("obj", "v1"))
+	r.EqualValues("o::obj", MigrateObjCopyTaskID("obj", ""))
+	r.EqualValues("o:v1:obj", MigrateObjCopyTaskID("obj", "v1"))
+	// an object name may contain the delimiter and still comes back whole
+	object, versionID, ok := ObjectFromCopyTaskID(MigrateObjCopyTaskID("a:b:c", "v1"))
+	r.True(ok)
+	r.EqualValues("a:b:c", object)
+	r.EqualValues("v1", versionID)
 	// an object may be named like anything, the prefix still tells the two
 	// kinds of task sharing the copy queue apart
 	r.NotEqual(copyVersionedIDPrefix+"pre", MigrateObjCopyTaskID(copyVersionedIDPrefix+"pre", ""))
