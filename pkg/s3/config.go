@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/clyso/chorus/pkg/dom"
+	"github.com/clyso/chorus/pkg/validate"
 )
 
 const (
@@ -115,12 +116,18 @@ func (s *StorageConfig) Init() error {
 	users := map[string]struct{}{}
 	storList := make([]string, 0, len(s.Storages))
 	for name, storage := range s.Storages {
+		if err := validate.Identifier("storage name", name); err != nil {
+			return fmt.Errorf("%w: app config: %w", dom.ErrInvalidStorageConfig, err)
+		}
 		if len(storage.Credentials) == 0 {
 			return fmt.Errorf("%w: app config: storage %q credentials not set", dom.ErrInvalidStorageConfig, name)
 		}
 		storUsers := map[string]struct{}{}
 		storUserList := make([]string, 0, len(storage.Credentials))
 		for user, cred := range storage.Credentials {
+			if err := validate.Identifier("user", user); err != nil {
+				return fmt.Errorf("%w: app config: storage %q: %w", dom.ErrInvalidStorageConfig, name, err)
+			}
 			if cred.SecretAccessKey == "" {
 				return fmt.Errorf("%w: app config: storage %q, user %q: secretAccessKey required", dom.ErrInvalidStorageConfig, name, user)
 			}
