@@ -184,17 +184,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, flushRedis bool) 
 		proxyURL = httpLocalhost(conf.Proxy.Port)
 	}
 
-	workerConf := conf.Config
-	if len(workerConf.Redis.Addresses) == 0 {
-		workerConf.Redis.Addresses = s3.NewConfAddrs(redisAddrs...)
-	}
-
-	// deep copy worker config
-	wcBytes, err := yaml.Marshal(&workerConf)
-	if err != nil {
-		return err
-	}
-	err = yaml.Unmarshal(wcBytes, &workerConf)
+	workerConf, err := workerConfig(conf, redisAddrs)
 	if err != nil {
 		return err
 	}
@@ -206,25 +196,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, flushRedis bool) 
 	})
 
 	if conf.Proxy.Enabled {
-		proxyConf := proxy.Config{
-			Common:              conf.Common,
-			Auth:                conf.Proxy.Auth,
-			Port:                conf.Proxy.Port,
-			Address:             conf.Proxy.Address,
-			Storage:             conf.Storage,
-			Cors:                conf.Proxy.Cors,
-			ReadFromDestination: conf.Proxy.ReadFromDestination,
-		}
-		if len(proxyConf.Redis.Addresses) == 0 {
-			proxyConf.Redis.Addresses = s3.NewConfAddrs(redisAddrs...)
-		}
-
-		// deep copy proxy config
-		pcBytes, err := yaml.Marshal(&proxyConf)
-		if err != nil {
-			return err
-		}
-		err = yaml.Unmarshal(pcBytes, &proxyConf)
+		proxyConf, err := proxyConfig(conf, redisAddrs)
 		if err != nil {
 			return err
 		}
@@ -265,6 +237,49 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, flushRedis bool) 
 	ev.Msg("standalone services started")
 
 	return g.Wait()
+}
+
+// Derived from the proxy section rather than rebuilt field by field, so that
+// an option added to the proxy later reaches it without anyone remembering
+// this place.
+func proxyConfig(conf *Config, redisAddrs []string) (proxy.Config, error) {
+	proxyConf := conf.Proxy
+	proxyConf.Common = conf.Common
+	proxyConf.Storage = conf.Storage
+	proxyConf, err := ownCopy(&proxyConf)
+	if err != nil {
+		return proxy.Config{}, err
+	}
+	if len(proxyConf.Redis.Addresses) == 0 {
+		proxyConf.Redis.Addresses = s3.NewConfAddrs(redisAddrs...)
+	}
+	return proxyConf, nil
+}
+
+func workerConfig(conf *Config, redisAddrs []string) (worker.Config, error) {
+	workerConf, err := ownCopy(&conf.Config)
+	if err != nil {
+		return worker.Config{}, err
+	}
+	if len(workerConf.Redis.Addresses) == 0 {
+		workerConf.Redis.Addresses = s3.NewConfAddrs(redisAddrs...)
+	}
+	return workerConf, nil
+}
+
+// Worker and proxy run side by side and each validates, and so writes to, the
+// config it is given; with pointers or maps in common they would do so
+// concurrently and into each other's. Decoding into a fresh value is what
+// makes the copy deep: decoding into src again would fill the very structs
+// its pointers already point at.
+func ownCopy[T any](src *T) (T, error) {
+	var dst T
+	b, err := yaml.Marshal(src)
+	if err != nil {
+		return dst, err
+	}
+	err = yaml.Unmarshal(b, &dst)
+	return dst, err
 }
 
 func httpLocalhost(port int) string {
