@@ -1,7 +1,9 @@
 package standalone
 
 import (
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -24,6 +26,11 @@ func standaloneConf() *Config {
 		Auth:                &auth.Config{},
 		Cors:                &cors.Config{Enabled: true},
 		ReadFromDestination: true,
+		// Every option the read-from-destination work added since; the copy
+		// this replaced had already dropped the first of them.
+		DestinationAnswerTimeout: 3 * time.Second,
+		DestinationTimeoutLimit:  3,
+		DestinationPause:         time.Minute,
 	}
 	return conf
 }
@@ -36,6 +43,8 @@ func TestProxyConfig(t *testing.T) {
 		r.NoError(err)
 		r.EqualValues(9669, got.Port)
 		r.True(got.ReadFromDestination)
+		r.Equal(3*time.Second, got.DestinationAnswerTimeout,
+			"a proxy option was dropped on the way into standalone mode")
 	})
 
 	t.Run("What the process has only one of comes from the top level", func(t *testing.T) {
@@ -88,4 +97,35 @@ func TestProxyConfig(t *testing.T) {
 		r.True(conf.Storage.Storages["main"].IsMain, "a write to a copy's storages reached the shared map")
 	})
 
+	// A field by field copy drops whatever nobody listed, which is how
+	// destinationAnswerTimeout came to be ignored here. Going over the fields
+	// rather than naming them is what notices the next one.
+	t.Run("No option of the proxy section is left behind", func(t *testing.T) {
+		r := require.New(t)
+
+		fromTopLevel := map[string]bool{"Common": true, "Storage": true}
+
+		conf := standaloneConf()
+		set := reflect.ValueOf(&conf.Proxy).Elem()
+		for i := range set.NumField() {
+			name := set.Type().Field(i).Name
+			if fromTopLevel[name] {
+				continue
+			}
+			r.False(set.Field(i).IsZero(),
+				"the fixture leaves %s unset, so this test cannot tell whether it survives", name)
+		}
+
+		got, err := proxyConfig(conf, nil)
+		r.NoError(err)
+		gv := reflect.ValueOf(got)
+		for i := range gv.NumField() {
+			name := gv.Type().Field(i).Name
+			if fromTopLevel[name] {
+				continue
+			}
+			r.False(gv.Field(i).IsZero(),
+				"proxy option %s was dropped on the way into standalone mode", name)
+		}
+	})
 }
