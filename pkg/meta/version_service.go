@@ -47,6 +47,24 @@ else
 	redis.call("hset", KEYS[1], ARGV[1], ARGV[2]);
 	return 1
 end`)
+	// args = the field/value pairs the caller last read, flattened.
+	luaDelIfUnchanged = redis.NewScript(`local expected = {}
+local want = 0
+for i = 1, #ARGV, 2 do
+	expected[ARGV[i]] = tonumber(ARGV[i+1])
+	want = want + 1
+end
+local cur = redis.call('HGETALL', KEYS[1])
+local seen = 0
+for i = 1, #cur, 2 do
+	local exp = expected[cur[i]]
+	if exp == nil or exp ~= tonumber(cur[i+1]) then return 0 end
+	seen = seen + 1
+end
+if seen ~= want then return 0 end
+redis.call('DEL', KEYS[1])
+return 1`)
+
 	luaDelKeysWithPrefix = redis.NewScript(`local cursor = tonumber(ARGV[1]) or 0
 local pattern = ARGV[2]
 local count = tonumber(ARGV[3]) or 1000
@@ -91,6 +109,9 @@ type VersionService interface {
 	UpdateIfGreater(ctx context.Context, obj dom.Object, dest Destination, version int64) error
 	// DeleteObjAll deletes all obj meta for all storages
 	DeleteObjAll(ctx context.Context, obj dom.Object) error
+	// Deletes all obj meta while it still holds what the caller read, and
+	// reports whether it did. Anything written since belongs to that write.
+	DeleteObjIfUnchanged(ctx context.Context, obj dom.Object, expected map[Destination]int64) (bool, error)
 	// DeleteBucketMeta deletes all versions info for bucket and version info for all bucket objects
 	DeleteBucketMeta(ctx context.Context, dest Destination, bucket string) error
 
@@ -212,6 +233,18 @@ func (s *versionSvc) DeleteBucketMeta(ctx context.Context, dest Destination, buc
 		}
 	}
 	return nil
+}
+
+func (s *versionSvc) DeleteObjIfUnchanged(ctx context.Context, obj dom.Object, expected map[Destination]int64) (bool, error) {
+	argv := make([]any, 0, len(expected)*2)
+	for dest, version := range expected {
+		argv = append(argv, string(dest), strconv.FormatInt(version, 10))
+	}
+	deleted, err := luaDelIfUnchanged.Run(ctx, s.client, []string{obj.Key()}, argv...).Int64()
+	if err != nil {
+		return false, err
+	}
+	return deleted == 1, nil
 }
 
 func (s *versionSvc) DeleteObjAll(ctx context.Context, obj dom.Object) error {

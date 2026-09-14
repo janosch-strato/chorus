@@ -5,6 +5,7 @@ readFromDestination: false # serve reads of already migrated objects from the re
 destinationAnswerTimeout: 5s # how long such a read waits for the destination storage to answer, connecting to it included, before it is read from the source storage instead. reading the answer itself is not bounded by it. negative turns it off
 destinationTimeoutLimit: 3 # how many reads in a row the destination storage may fail to answer in time before such reads are paused for destinationPause. negative turns the pausing off
 destinationPause: 5m # how long reads stay on the source storage once the destination storage reached destinationTimeoutLimit. negative turns the pausing off
+instanceID: # required. name of this proxy, unique among all proxies and kept across restarts. on startup the proxy finishes the deletes it left interrupted under this name
 cors:
   enabled: false
   allowAll: false

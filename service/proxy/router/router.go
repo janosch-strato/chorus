@@ -17,7 +17,6 @@
 package router
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -30,6 +29,7 @@ import (
 	"github.com/clyso/chorus/pkg/meta"
 	"github.com/clyso/chorus/pkg/policy"
 	"github.com/clyso/chorus/pkg/ratelimit"
+	"github.com/clyso/chorus/pkg/replication"
 	"github.com/clyso/chorus/pkg/s3"
 	"github.com/clyso/chorus/pkg/s3client"
 	"github.com/clyso/chorus/pkg/storage"
@@ -47,12 +47,18 @@ func NewRouter(
 	policySvc policy.Service,
 	storageSvc storage.Service,
 	limit ratelimit.RPM,
+	replSvc replication.Service,
+	deleteIntents *meta.DeleteIntents,
+	instanceID string,
 	destinationAnswerTimeout time.Duration,
 	destinationTimeoutLimit int,
 	destinationPauseTime time.Duration) Router {
 	return &router{
 		clients:                  clients,
 		taskClient:               taskClient,
+		replSvc:                  replSvc,
+		deleteIntents:            deleteIntents,
+		instanceID:               instanceID,
 		versionSvc:               versionSvc,
 		policySvc:                policySvc,
 		storageSvc:               storageSvc,
@@ -65,6 +71,14 @@ func NewRouter(
 type router struct {
 	clients    s3client.Service
 	taskClient *asynq.Client
+	// replSvc queues the replication of a delete, which the delete paths do
+	// themselves so that they can take their intent back afterwards.
+	replSvc replication.Service
+	// deleteIntents is what a delete is written down in before it is made,
+	// see deleteObject and meta.DeleteIntents.
+	deleteIntents *meta.DeleteIntents
+	// instanceID is what this proxy calls itself in those records.
+	instanceID string
 	versionSvc meta.VersionService
 	policySvc  policy.Service
 	storageSvc storage.Service
@@ -99,17 +113,17 @@ func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks
 			return nil, nil, "", false, fmt.Errorf("versioning api is disabled: %w", dom.ErrNotImplemented)
 		}
 	case s3.DeleteObject:
-		// Asked before the storage is, since a delete cannot be taken back.
-		// The batch is asked in deleteObjects, where its body is read.
+		// Before the storage is asked: a delete carried out cannot be taken
+		// back. The batch is asked about in deleteObjects, which reads its body.
 		if req.URL.Query().Get("versionId") != "" {
 			return nil, nil, "", false, errDeleteVersionRefused
 		}
 	}
 
-	// The storage carries these out on its own, and its answer is the only
-	// sign that it is done. For a delete the answer is also the only record of
-	// what it did; for the other two the task made afterwards reads the
-	// source, and reads it too early without waiting.
+	// These wait for the answer even once the client has gone. For a delete the
+	// answer is the only record of what it did, down to which keys a multi
+	// delete took; for the other two the task made afterwards reads the source,
+	// and a source read before the storage finished is read too early.
 	switch method {
 	case s3.DeleteObject, s3.DeleteObjects, s3.CopyObject, s3.CompleteMultipartUpload:
 		ctx = xctx.SetResponseNeeded(ctx)
@@ -149,14 +163,11 @@ func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks
 	case s3.PutObject, s3.CopyObject:
 		resp, taskList, storage, isApiErr, err = r.putObject(req)
 	case s3.DeleteObject:
-		resp, storage, isApiErr, err = r.commonWrite(req)
-		task = &tasks.ObjectSyncPayload{
-			Object:  dom.Object{Bucket: bucket, Name: object},
-			Sync:    tasks.Sync{FromStorage: storage},
-			Deleted: true,
-		}
+		// Queues its own replication, see deleteObject.
+		resp, storage, isApiErr, err = r.deleteObject(req)
 	case s3.DeleteObjects:
-		resp, taskList, storage, isApiErr, err = r.deleteObjects(req)
+		// Queues its own replication, see deleteObjects.
+		resp, storage, isApiErr, err = r.deleteObjects(req)
 	case s3.CreateMultipartUpload:
 		resp, storage, isApiErr, err = r.createMultipartUpload(req)
 	case s3.CompleteMultipartUpload:
@@ -173,26 +184,6 @@ func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks
 	}
 	written := dom.StorageMayHaveActed(err)
 
-	// A deleted object is gone from the source storage, but the migration
-	// destination keeps it until the deletion has been replicated, so it must
-	// not be read from there, see objectDeleted().
-	//
-	// The deletion is on the storage, so recording it must not depend on the
-	// client that asked for it still being there.
-	if written && !isApiErr {
-		switch method {
-		case s3.DeleteObject:
-			r.objectDeleted(context.WithoutCancel(ctx), storage, object)
-		case s3.DeleteObjects:
-			dropCtx := context.WithoutCancel(ctx)
-			for _, t := range taskList {
-				if payload, ok := t.(*tasks.ObjectSyncPayload); ok && payload.Deleted {
-					r.objectDeleted(dropCtx, storage, payload.Object.Name)
-				}
-			}
-		}
-	}
-
 	if written && task != nil {
 		task.SetFrom(storage)
 		if taskList == nil {
@@ -201,7 +192,7 @@ func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks
 	}
 
 	// The request reached the storage and no answer was read, so what follows
-	// is a guess, see tasks.ObjectSyncPayload.Unconfirmed.
+	// is a reason to go and look, not a record of what happened.
 	if written && err != nil {
 		for _, t := range taskList {
 			if payload, ok := t.(*tasks.ObjectSyncPayload); ok {

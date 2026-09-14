@@ -104,7 +104,9 @@ func Test_svc_Replicate_deleteKeepsUnconfirmedVersions(t *testing.T) {
 		require.NotEmpty(t, versions, "seed")
 	}
 
-	t.Run("A delete the storage confirmed drops the versions with the object", func(t *testing.T) {
+	// Replicate is reached before the storage has said what it did, and cannot
+	// tell a write that landed beside the delete from the delete itself.
+	t.Run("Queueing a delete leaves the versions to whoever sent it", func(t *testing.T) {
 		r := require.New(t)
 		object := "confirmed"
 		seed(t, object)
@@ -113,11 +115,11 @@ func Test_svc_Replicate_deleteKeepsUnconfirmedVersions(t *testing.T) {
 
 		versions, err := versionSvc.GetObj(ctx, dom.Object{Bucket: testBucket, Name: object})
 		r.NoError(err)
-		r.Empty(versions, "a confirmed delete leaves no versions behind")
+		r.NotEmpty(versions,
+			"the versions went without anyone checking a write had not landed on them")
 	})
 
-	// The versions are what tells the worker whether the object was really
-	// deleted, so a delete nobody confirmed must not destroy them.
+	// They are what tells the worker whether the object was really deleted.
 	t.Run("A delete nobody confirmed keeps the versions", func(t *testing.T) {
 		r := require.New(t)
 		object := "unconfirmed"

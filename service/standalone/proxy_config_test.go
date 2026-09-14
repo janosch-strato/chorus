@@ -31,6 +31,7 @@ func standaloneConf() *Config {
 		DestinationAnswerTimeout: 3 * time.Second,
 		DestinationTimeoutLimit:  3,
 		DestinationPause:         time.Minute,
+		InstanceID:               "standalone-proxy",
 	}
 	return conf
 }

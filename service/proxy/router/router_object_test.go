@@ -39,58 +39,113 @@ import (
 	"github.com/clyso/chorus/pkg/testutil"
 )
 
-// versioningEnabled puts the feature flags in a known state for the tests that
-// reach a feature check, and puts them back afterwards.
 func versioningEnabled(t *testing.T, on bool) {
 	t.Helper()
 	features.Set(&features.Config{Versioning: on})
 	t.Cleanup(func() { features.Set(nil) })
 }
 
-// replicatedRouter is a router whose bucket is replicated to testDest and
-// whose storage answers everything with 204.
 func replicatedRouter(t *testing.T) *router {
 	t.Helper()
-	ctx := t.Context()
-	c := testutil.SetupRedis(t)
-	policySvc := policy.NewService(c, nil, nil)
-	require.NoError(t, policySvc.AddBucketRoutingPolicy(ctx,
-		entity.NewBucketRoutingPolicyID(testUser, testBucket), testSource, false))
-	_, err := policySvc.AddBucketReplicationPolicy(ctx,
+	rt := answeringRouter(t)
+	_, err := rt.policySvc.AddBucketReplicationPolicy(t.Context(),
 		entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket), nil)
 	require.NoError(t, err)
-	return &router{
-		clients: fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
-			return &http.Response{
-				StatusCode: http.StatusNoContent,
-				Body:       io.NopCloser(strings.NewReader("")),
-				Header:     http.Header{},
-			}, false, nil
-		}}},
-		policySvc:  policySvc,
-		versionSvc: meta.NewVersionService(c),
-		queueSvc:   &tasks.QueueServiceMock{},
-	}
+	return rt
 }
 
-func TestRouteDeleteObjectWithoutAVersionNamesNone(t *testing.T) {
+// The delete queues its own replication, so Route hands no task back.
+func TestRouteDeleteObjectQueuesItsOwnReplication(t *testing.T) {
 	r := require.New(t)
 	versioningEnabled(t, true)
 
-	rt := answeringRouter(t)
+	rt := replicatedRouter(t)
+	c := routerRedis[t.Name()]
 	_, taskList, _, _, err := rt.Route(deleteObjectReq("obj", ""))
 	r.NoError(err)
 
-	r.Len(taskList, 1)
-	payload, ok := taskList[0].(*tasks.ObjectSyncPayload)
-	r.True(ok)
-	r.Empty(payload.Object.Version, "an ordinary delete is of the object as a whole")
+	r.Empty(taskList, "the delete was handed back to be queued a second time")
+	r.Equal([]string{"obj"}, queuedDeletes(t, c), "nothing was queued to replicate the delete")
 }
 
-// The version id the client names is the source storage's own, and nothing
-// maps it to the copy the destination made. Carrying the delete out on the
-// source alone would tell the client the version is gone while the destination
-// still holds it, so the client is told instead.
+func TestRouteDeleteObjectWritesItDownBeforeSending(t *testing.T) {
+	r := require.New(t)
+	versioningEnabled(t, true)
+
+	rt := replicatedRouter(t)
+	c := routerRedis[t.Name()]
+	var writtenDownWhenSent []meta.DeleteIntent
+	rt.clients = fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
+		writtenDownWhenSent, _ = meta.NewDeleteIntents(c).OwnedBy(t.Context(), testInstance)
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Body:       io.NopCloser(strings.NewReader("")),
+			Header:     http.Header{},
+		}, false, nil
+	}}}
+
+	_, _, _, _, err := rt.Route(deleteObjectReq("obj", ""))
+	r.NoError(err)
+
+	r.Len(writtenDownWhenSent, 1,
+		"the storage was asked to delete the object before anything said the delete was happening")
+	r.Equal("obj", writtenDownWhenSent[0].Object.Name)
+
+	left, err := meta.NewDeleteIntents(c).OwnedBy(t.Context(), testInstance)
+	r.NoError(err)
+	r.Empty(left, "the delete is queued and still reads as unfinished, so a restart would make it again")
+}
+
+// The write's versions are its own record. Dropping them with the delete would
+// leave the destination without an object the source has and nothing saying so.
+func TestRouteDeleteObjectKeepsVersionsWrittenWhileItRan(t *testing.T) {
+	r := require.New(t)
+	versioningEnabled(t, true)
+
+	rt := replicatedRouter(t)
+	c := routerRedis[t.Name()]
+	versionSvc := meta.NewVersionService(c)
+	obj := dom.Object{Bucket: testBucket, Name: "obj"}
+
+	// a write lands while the delete is on its way to the storage
+	rt.clients = fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
+		_, err := versionSvc.IncrementObj(t.Context(), obj, meta.ToDest(testSource, ""))
+		require.NoError(t, err)
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Body:       io.NopCloser(strings.NewReader("")),
+			Header:     http.Header{},
+		}, false, nil
+	}}}
+
+	_, _, _, _, err := rt.Route(deleteObjectReq("obj", ""))
+	r.NoError(err)
+
+	versions, err := versionSvc.GetObj(t.Context(), obj)
+	r.NoError(err)
+	r.NotEmpty(versions, "the delete threw away the record of a write that landed beside it")
+}
+
+func TestRouteDeleteObjectDropsTheVersionsItConfirmed(t *testing.T) {
+	r := require.New(t)
+	versioningEnabled(t, true)
+
+	rt := replicatedRouter(t)
+	c := routerRedis[t.Name()]
+	versionSvc := meta.NewVersionService(c)
+	obj := dom.Object{Bucket: testBucket, Name: "obj"}
+	_, err := versionSvc.IncrementObj(t.Context(), obj, meta.ToDest(testSource, ""))
+	r.NoError(err)
+
+	_, _, _, _, err = rt.Route(deleteObjectReq("obj", ""))
+	r.NoError(err)
+
+	versions, err := versionSvc.GetObj(t.Context(), obj)
+	r.NoError(err)
+	r.Empty(versions, "the storage said it deleted the object and the worker will still go and ask")
+}
+
+// Nothing maps the source's version id to the copy the destination made.
 func TestRouteDeleteObjectRefusesAVersion(t *testing.T) {
 	r := require.New(t)
 
@@ -116,7 +171,9 @@ func TestRouteDeleteObjectsReplicatesWhenOnlyTheAnswerNamesVersions(t *testing.T
 	r := require.New(t)
 	versioningEnabled(t, true)
 
-	rt := newTestRouter(t, &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
+	rt := replicatedRouter(t)
+	c := routerRedis[t.Name()]
+	rt.clients = fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
 		body := `<DeleteResult>` +
 			`<Deleted><Key>one</Key><VersionId>3HL4kqtGWpM</VersionId></Deleted>` +
 			`<Deleted><Key>two</Key><VersionId>QUpfdndhfd8</VersionId></Deleted>` +
@@ -126,13 +183,12 @@ func TestRouteDeleteObjectsReplicatesWhenOnlyTheAnswerNamesVersions(t *testing.T
 			Body:       io.NopCloser(strings.NewReader(body)),
 			Header:     http.Header{},
 		}, false, nil
-	}})
+	}}}
 
-	_, taskList, _, _, err := rt.Route(deleteObjectsReq("one", "two"))
+	_, _, _, _, err := rt.Route(deleteObjectsReq("one", "two"))
 	r.NoError(err)
 
-	keys, _ := deletedKeys(t, taskList)
-	r.ElementsMatch([]string{"one", "two"}, keys,
+	r.ElementsMatch([]string{"one", "two"}, queuedDeletes(t, c),
 		"the delete markers the storage minted were taken for versions the client named")
 }
 
@@ -172,64 +228,104 @@ func TestRouteDeleteObjectVersionDoesNotDropTheMigratedRecord(t *testing.T) {
 }
 
 func TestRouteDeleteObjects(t *testing.T) {
-	// The whole point of waiting for the answer: what the storage refused is
-	// named there and nowhere else.
-	t.Run("Only the keys the storage says it deleted are replicated", func(t *testing.T) {
-		r := require.New(t)
-
-		var sawResponseNeeded bool
-		rt := newTestRouter(t, &fakeClient{do: func(req *http.Request) (*http.Response, bool, error) {
-			sawResponseNeeded = xctx.GetResponseNeeded(req.Context())
-			body := `<DeleteResult>` +
-				`<Deleted><Key>gone</Key></Deleted>` +
-				`<Error><Key>refused</Key><Code>AccessDenied</Code></Error>` +
-				`</DeleteResult>`
+	answering := func(t *testing.T, rt *router, body string) {
+		t.Helper()
+		rt.clients = fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Body:       io.NopCloser(strings.NewReader(body)),
 				Header:     http.Header{},
 			}, false, nil
-		}})
+		}}}
+	}
 
-		_, taskList, storage, isApiErr, err := rt.Route(deleteObjectsReq("gone", "refused"))
+	// The batch goes in one go, so there is no telling beforehand which keys
+	// the storage will take.
+	t.Run("Every key is written down before the batch is sent", func(t *testing.T) {
+		r := require.New(t)
+		versioningEnabled(t, true)
+
+		rt := replicatedRouter(t)
+		c := routerRedis[t.Name()]
+		var writtenDown []string
+		rt.clients = fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
+			intents, _ := meta.NewDeleteIntents(c).OwnedBy(t.Context(), testInstance)
+			for _, intent := range intents {
+				writtenDown = append(writtenDown, intent.Object.Name)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`<DeleteResult><Deleted><Key>gone</Key></Deleted></DeleteResult>`)),
+				Header:     http.Header{},
+			}, false, nil
+		}}}
+
+		_, taskList, _, _, err := rt.Route(deleteObjectsReq("gone", "refused"))
+		r.NoError(err)
+		r.Empty(taskList, "the keys were handed back to be queued a second time")
+		r.ElementsMatch([]string{"gone", "refused"}, writtenDown,
+			"the batch was sent before every one of its keys was written down")
+	})
+
+	t.Run("Only the keys the storage says it deleted are replicated", func(t *testing.T) {
+		r := require.New(t)
+		versioningEnabled(t, true)
+
+		rt := replicatedRouter(t)
+		c := routerRedis[t.Name()]
+		answering(t, rt, `<DeleteResult>`+
+			`<Deleted><Key>gone</Key></Deleted>`+
+			`<Error><Key>refused</Key><Code>AccessDenied</Code></Error>`+
+			`</DeleteResult>`)
+
+		_, _, storage, isApiErr, err := rt.Route(deleteObjectsReq("gone", "refused"))
 		r.NoError(err)
 		r.False(isApiErr)
 		r.Equal(testSource, storage)
-		r.True(sawResponseNeeded, "the delete did not wait for the storage's answer")
 
-		keys, unconfirmed := deletedKeys(t, taskList)
-		r.ElementsMatch([]string{"gone"}, keys, "a key the storage refused was replicated as deleted")
-		r.Zero(unconfirmed, "an answered delete is not a guess")
+		r.Equal([]string{"gone"}, queuedDeletes(t, c),
+			"a key the storage refused was replicated as deleted")
+		left, err := meta.NewDeleteIntents(c).OwnedBy(t.Context(), testInstance)
+		r.NoError(err)
+		r.Empty(left, "keys the storage refused still read as unfinished, so a restart would delete them")
 	})
 
-	// The fallback, now reachable only when the storage took the batch and
-	// then died: which of the keys went is unknown, so all of them are looked
-	// at rather than trusted.
 	t.Run("A storage that never answered puts every key up unconfirmed", func(t *testing.T) {
 		r := require.New(t)
+		versioningEnabled(t, true)
 
-		rt := newTestRouter(t, &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
+		rt := replicatedRouter(t)
+		c := routerRedis[t.Name()]
+		rt.clients = fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
 			return nil, false, fmt.Errorf("%w: connection reset", dom.ErrStorageAnswerLost)
-		}})
+		}}}
 
-		_, taskList, _, _, err := rt.Route(deleteObjectsReq("one", "two"))
+		_, _, _, _, err := rt.Route(deleteObjectsReq("one", "two"))
 		r.ErrorIs(err, dom.ErrStorageAnswerLost)
 
-		keys, unconfirmed := deletedKeys(t, taskList)
-		r.ElementsMatch([]string{"one", "two"}, keys)
-		r.Equal(len(keys), unconfirmed, "a guess was passed on as a record of what happened")
+		r.ElementsMatch([]string{"one", "two"}, queuedDeletes(t, c))
+		left, err := meta.NewDeleteIntents(c).OwnedBy(t.Context(), testInstance)
+		r.NoError(err)
+		r.Empty(left, "the keys are queued and still read as unfinished")
 	})
 
 	t.Run("A client that left before the request was written changes nothing", func(t *testing.T) {
 		r := require.New(t)
+		versioningEnabled(t, true)
 
-		rt := newTestRouter(t, &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
+		rt := replicatedRouter(t)
+		c := routerRedis[t.Name()]
+		rt.clients = fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
 			return nil, false, fmt.Errorf("%w: context canceled", dom.ErrClientGone)
-		}})
+		}}}
 
-		_, taskList, _, _, err := rt.Route(deleteObjectsReq("one", "two"))
+		_, _, _, _, err := rt.Route(deleteObjectsReq("one", "two"))
 		r.ErrorIs(err, dom.ErrClientGone)
-		r.Empty(taskList, "nothing reached the storage, so there is nothing to replicate")
+
+		r.Empty(queuedDeletes(t, c), "nothing reached the storage, so there is nothing to replicate")
+		left, err := meta.NewDeleteIntents(c).OwnedBy(t.Context(), testInstance)
+		r.NoError(err)
+		r.Empty(left, "a delete that never happened was left to be made again at startup")
 	})
 }
 
@@ -253,13 +349,9 @@ func TestRouteDeleteObjectWaitsForTheAnswer(t *testing.T) {
 	ctx = xctx.SetObject(ctx, "obj")
 	ctx = xctx.SetMethod(ctx, s3.DeleteObject)
 
-	_, taskList, _, _, err := rt.Route(req.WithContext(ctx))
+	_, _, _, _, err := rt.Route(req.WithContext(ctx))
 	r.NoError(err)
 	r.True(sawResponseNeeded, "the delete did not wait for the storage's answer")
-
-	keys, unconfirmed := deletedKeys(t, taskList)
-	r.Equal([]string{"obj"}, keys)
-	r.Zero(unconfirmed)
 }
 
 func objectReq(req *http.Request, method s3.Method, object string) *http.Request {
