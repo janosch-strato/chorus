@@ -57,13 +57,11 @@ func (s *svc) HandleBucketCreate(ctx context.Context, t *asynq.Task) (err error)
 		return err
 	}
 
-	srcExists := true
 	versioningConfig, err := fromClient.S3().GetBucketVersioning(ctx, p.Bucket)
-	if err != nil && mclient.ToErrorResponse(err).Code != "NoSuchBucket" {
-		return fmt.Errorf("unable to get bucket versioning config: %w", err)
-	}
-
-	if !srcExists {
+	if err != nil {
+		if mclient.ToErrorResponse(err).Code != "NoSuchBucket" {
+			return fmt.Errorf("unable to get bucket versioning config: %w", err)
+		}
 		zerolog.Ctx(ctx).Warn().Msg("skip bucket create: bucket not exists in source storage")
 		return nil
 	}
