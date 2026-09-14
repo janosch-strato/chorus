@@ -159,7 +159,8 @@ func (s *svc) Replicate(ctx context.Context, task tasks.SyncTask) error {
 			// Nobody said these were deleted, and their versions are what is
 			// left for the worker to ask the source about.
 		case t.Deleted:
-			err = s.versionSvc.DeleteObjAll(ctx, t.Object)
+			// Whoever sent the delete drops these, and only while they still
+			// hold what it read, which is not known here.
 		default:
 			_, err = s.versionSvc.IncrementObj(ctx, t.Object, meta.ToDest(t.FromStorage, ""))
 		}

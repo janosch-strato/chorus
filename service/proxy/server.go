@@ -141,8 +141,17 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	}
 	logger.Info().Msg("s3 clients connected")
 
-	routeSvc := router.NewRouter(s3Clients, taskClient, verSvc, policySvc, storageSvc, limiter)
 	replSvc := replication.New(taskClient, verSvc, policySvc)
+
+	// Before it takes any more traffic.
+	deleteIntents := meta.NewDeleteIntents(appRedis)
+	if err = finishInterruptedDeletes(ctx, deleteIntents, conf.InstanceID,
+		storageFinisher{clients: s3Clients, versionSvc: verSvc, replSvc: replSvc}); err != nil {
+		return fmt.Errorf("unable to finish the deletes left unfinished: %w", err)
+	}
+
+	routeSvc := router.NewRouter(s3Clients, taskClient, verSvc, policySvc, storageSvc, limiter,
+		replSvc, deleteIntents, conf.InstanceID)
 	handler := router.Serve(routeSvc, replSvc)
 	handler = auth.Middleware(conf.Auth, conf.Storage.Storages).Wrap(handler)
 	if conf.Metrics.Enabled {

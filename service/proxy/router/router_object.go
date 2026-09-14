@@ -24,11 +24,14 @@ import (
 	"slices"
 
 	mclient "github.com/minio/minio-go/v7"
+	"github.com/rs/xid"
 	"github.com/rs/zerolog"
 
 	xctx "github.com/clyso/chorus/pkg/ctx"
 	"github.com/clyso/chorus/pkg/dom"
 	"github.com/clyso/chorus/pkg/entity"
+	"github.com/clyso/chorus/pkg/log"
+	"github.com/clyso/chorus/pkg/meta"
 	"github.com/clyso/chorus/pkg/s3client"
 	"github.com/clyso/chorus/pkg/tasks"
 )
@@ -94,87 +97,214 @@ func (r *router) putObject(req *http.Request) (resp *http.Response, taskList []t
 	return
 }
 
-func (r *router) deleteObjects(req *http.Request) (resp *http.Response, taskList []tasks.SyncTask, storage string, isApiErr bool, err error) {
+// deleteObject carries out a delete of one object, writing it down first and
+// taking that back once its replication is queued. A delete sent and not
+// written down is the one loss nothing can find afterwards, see
+// meta.DeleteIntents.
+func (r *router) deleteObject(req *http.Request) (resp *http.Response, storage string, isApiErr bool, err error) {
 	ctx := req.Context()
-	user, bucket := xctx.GetUser(ctx), xctx.GetBucket(ctx)
-	routingPolicyID := entity.NewBucketRoutingPolicyID(user, bucket)
-	storage, err = r.policySvc.GetRoutingPolicy(ctx, routingPolicyID)
+	user, bucket, object := xctx.GetUser(ctx), xctx.GetBucket(ctx), xctx.GetObject(ctx)
+	storage, err = r.policySvc.GetRoutingPolicy(ctx, entity.NewBucketRoutingPolicyID(user, bucket))
 	if err != nil {
 		if errors.Is(err, dom.ErrNotFound) {
-			return nil, nil, "", false, fmt.Errorf("%w: routing policy not configured: %w", dom.ErrPolicy, err)
+			return nil, "", false, fmt.Errorf("%w: routing policy not configured: %w", dom.ErrPolicy, err)
 		}
-		return nil, nil, "", false, err
+		return nil, "", false, err
 	}
 	ctx = xctx.SetStorage(ctx, storage)
 	req = req.WithContext(ctx)
 
 	client, err := r.clients.GetByName(ctx, storage)
 	if err != nil {
-		return nil, nil, "", false, err
-	}
-	reqBody := deleteObjectsRequest{}
-	err = s3client.ExtractReqBody(req, &reqBody)
-	if err != nil {
-		zerolog.Ctx(ctx).Err(err).Msg("unable to unmarshal deleteObjectsRequest request body")
-		return
+		return nil, "", false, err
 	}
 
-	// The storage carries a batch out in one go, so one key that cannot be
-	// replicated cannot be held back once it is sent.
-	if slices.ContainsFunc(reqBody.Objects, func(o objectID) bool { return o.VersionID != "" }) {
-		return nil, nil, storage, false, errDeleteVersionRefused
+	// The delete goes to the storage whether or not the client stays, see
+	// cancelUntilWritten.
+	recordCtx := context.WithoutCancel(ctx)
+	intents, err := r.intendToDelete(recordCtx, user, storage, []dom.Object{{Bucket: bucket, Name: object}})
+	if err != nil {
+		return nil, storage, false, err
 	}
 
 	resp, isApiErr, err = client.Do(req)
 	if isApiErr || !dom.StorageMayHaveActed(err) {
-		return
+		// Refused, or it never reached the storage: nothing happened.
+		r.deleteIntentsDone(recordCtx, intents)
+		return resp, storage, isApiErr, err
+	}
+
+	// The destination keeps the object until the delete is replicated, so
+	// reads of it belong on the source.
+	r.objectDeleted(recordCtx, storage, object)
+	r.queueDeletes(recordCtx, intents, err != nil)
+	return resp, storage, isApiErr, err
+}
+
+// The versions are recorded so that a proxy finishing the job later can tell a
+// write that landed since from the object it was asked to delete.
+func (r *router) intendToDelete(ctx context.Context, user, storage string, objs []dom.Object) ([]meta.DeleteIntent, error) {
+	request := xid.New().String()
+	intents := make([]meta.DeleteIntent, 0, len(objs))
+	for _, obj := range objs {
+		versions, err := r.versionSvc.GetObj(ctx, obj)
+		if err != nil {
+			return nil, fmt.Errorf("delete: unable to read the object versions: %w", err)
+		}
+		intents = append(intents, meta.DeleteIntent{
+			Request: request, Owner: r.instanceID, User: user, Storage: storage,
+			Object: obj, Versions: versions,
+		})
+	}
+	if err := r.deleteIntents.Record(ctx, intents); err != nil {
+		return nil, fmt.Errorf("delete: unable to write down the delete before making it: %w", err)
+	}
+	return intents, nil
+}
+
+// An intent left behind is finished by the next proxy to start.
+//
+// A confirmed delete also takes the object's versions with it, which is what
+// tells the worker it needs to ask nobody - but only while they still hold what
+// the intent read. A write that landed while the delete was in flight put its
+// own versions there, and those record that write, not this delete.
+func (r *router) queueDeletes(ctx context.Context, intents []meta.DeleteIntent, unconfirmed bool) {
+	done := make([]meta.DeleteIntent, 0, len(intents))
+	for _, intent := range intents {
+		if !unconfirmed {
+			dropped, err := r.versionSvc.DeleteObjIfUnchanged(ctx, intent.Object, intent.Versions)
+			switch {
+			case err != nil:
+				zerolog.Ctx(ctx).Err(err).Str(log.Object, intent.Object.Name).
+					Msg("delete: unable to drop the object versions")
+			case !dropped:
+				zerolog.Ctx(ctx).Info().Str(log.Object, intent.Object.Name).
+					Msg("delete: object versions changed while it was being deleted: left in place")
+			}
+		}
+		if err := r.replSvc.Replicate(ctx, &tasks.ObjectSyncPayload{
+			Object:      intent.Object,
+			Sync:        tasks.Sync{FromStorage: intent.Storage},
+			Deleted:     true,
+			Unconfirmed: unconfirmed,
+		}); err != nil {
+			zerolog.Ctx(ctx).Err(err).Str(log.Object, intent.Object.Name).
+				Msg("delete: unable to queue the replication, leaving it to be finished at startup")
+			continue
+		}
+		done = append(done, intent)
+	}
+	r.deleteIntentsDone(ctx, done)
+}
+
+func (r *router) deleteIntentsDone(ctx context.Context, intents []meta.DeleteIntent) {
+	if err := r.deleteIntents.Done(ctx, intents); err != nil {
+		zerolog.Ctx(ctx).Err(err).Msg("delete: unable to take back the record of a delete that is finished")
+	}
+}
+
+// Every key is written down before the batch is sent, as in deleteObject.
+func (r *router) deleteObjects(req *http.Request) (resp *http.Response, storage string, isApiErr bool, err error) {
+	ctx := req.Context()
+	user, bucket := xctx.GetUser(ctx), xctx.GetBucket(ctx)
+	routingPolicyID := entity.NewBucketRoutingPolicyID(user, bucket)
+	storage, err = r.policySvc.GetRoutingPolicy(ctx, routingPolicyID)
+	if err != nil {
+		if errors.Is(err, dom.ErrNotFound) {
+			return nil, "", false, fmt.Errorf("%w: routing policy not configured: %w", dom.ErrPolicy, err)
+		}
+		return nil, "", false, err
+	}
+	ctx = xctx.SetStorage(ctx, storage)
+	req = req.WithContext(ctx)
+
+	client, err := r.clients.GetByName(ctx, storage)
+	if err != nil {
+		return nil, "", false, err
+	}
+	reqBody := deleteObjectsRequest{}
+	if err = s3client.ExtractReqBody(req, &reqBody); err != nil {
+		zerolog.Ctx(ctx).Err(err).Msg("unable to unmarshal deleteObjectsRequest request body")
+		return nil, storage, false, err
+	}
+
+	// One such key refuses the batch: the storage carries a multi delete out
+	// in one go, so there is no holding a single key back.
+	if slices.ContainsFunc(reqBody.Objects, func(o objectID) bool { return o.VersionID != "" }) {
+		return nil, storage, false, errDeleteVersionRefused
+	}
+
+	recordCtx := context.WithoutCancel(ctx)
+	objs := make([]dom.Object, 0, len(reqBody.Objects))
+	for _, object := range reqBody.Objects {
+		objs = append(objs, object.toDom(bucket))
+	}
+	intents, err := r.intendToDelete(recordCtx, user, storage, objs)
+	if err != nil {
+		return nil, storage, false, err
+	}
+
+	resp, isApiErr, err = client.Do(req)
+	if isApiErr || !dom.StorageMayHaveActed(err) {
+		r.deleteIntentsDone(recordCtx, intents)
+		return resp, storage, isApiErr, err
 	}
 	if err != nil {
-		// Waited out now, so the storage took the batch and never answered.
-		// Which of the keys went is unknown, so all are looked at.
-		for _, object := range reqBody.Objects {
-			taskList = append(taskList, &tasks.ObjectSyncPayload{
-				Object:  object.toDom(bucket),
-				Sync:    tasks.Sync{FromStorage: storage},
-				Deleted: true,
-			})
+		// Which of the keys went is unknown, so every one is put up to be
+		// looked at and none may still count as migrated.
+		for _, intent := range intents {
+			r.objectDeleted(recordCtx, storage, intent.Object.Name)
 		}
-		return
+		r.queueDeletes(recordCtx, intents, true)
+		return resp, storage, isApiErr, err
 	}
 
 	respBody := multiDeleteResult{}
 	if xmlErr := s3client.ExtractRespBody(resp, &respBody); xmlErr != nil {
 		zerolog.Ctx(ctx).Err(xmlErr).Msg("unable to unmarshal multiDeleteResult response body")
-		err = xmlErr
-		return
+		// An unreadable answer says as little as no answer at all.
+		r.queueDeletes(recordCtx, intents, true)
+		return resp, storage, isApiErr, xmlErr
 	}
 
-	if reqBody.Quiet {
-		// quiet mode: filter request objects by response errors
-		errSet := make(map[string]struct{}, len(respBody.Error))
-		for _, delErr := range respBody.Error {
-			errSet[delErr.Key] = struct{}{}
+	deleted := deletedKeysOf(reqBody, respBody)
+	went := make([]meta.DeleteIntent, 0, len(deleted))
+	kept := make([]meta.DeleteIntent, 0, len(intents))
+	for _, intent := range intents {
+		if slices.Contains(deleted, intent.Object.Name) {
+			went = append(went, intent)
+			// The destination has not caught up yet.
+			r.objectDeleted(recordCtx, storage, intent.Object.Name)
+			continue
 		}
-		for _, object := range reqBody.Objects {
-			if _, ok := errSet[object.Key]; ok {
-				continue
-			}
-			taskList = append(taskList, &tasks.ObjectSyncPayload{
-				Object:  object.toDom(bucket),
-				Sync:    tasks.Sync{FromStorage: storage},
-				Deleted: true,
-			})
-		}
-	} else {
-		// normal mode: use deleted obj list from response
-		taskList = make([]tasks.SyncTask, len(respBody.Deleted))
-		for i, object := range respBody.Deleted {
-			taskList[i] = &tasks.ObjectSyncPayload{
-				Object:  object.toDom(bucket),
-				Sync:    tasks.Sync{FromStorage: storage},
-				Deleted: true,
-			}
-		}
+		kept = append(kept, intent)
 	}
-	return
+	// The storage named what it refused, so those keys were not deleted.
+	r.deleteIntentsDone(recordCtx, kept)
+	r.queueDeletes(recordCtx, went, false)
+	return resp, storage, isApiErr, err
+}
+
+// A quiet batch is answered with the failures only, so the rest of what was
+// asked for is what went.
+func deletedKeysOf(reqBody deleteObjectsRequest, respBody multiDeleteResult) []string {
+	if !reqBody.Quiet {
+		keys := make([]string, 0, len(respBody.Deleted))
+		for _, object := range respBody.Deleted {
+			keys = append(keys, object.Key)
+		}
+		return keys
+	}
+	refused := make(map[string]struct{}, len(respBody.Error))
+	for _, delErr := range respBody.Error {
+		refused[delErr.Key] = struct{}{}
+	}
+	keys := make([]string, 0, len(reqBody.Objects))
+	for _, object := range reqBody.Objects {
+		if _, ok := refused[object.Key]; ok {
+			continue
+		}
+		keys = append(keys, object.Key)
+	}
+	return keys
 }

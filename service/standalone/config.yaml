@@ -21,6 +21,7 @@ proxy:
   port: 9669
   headBucketCache: enabled # answer a bucket existence check from the answer the source storage gave for the first one
   readFromDestination: false # serve reads of already migrated objects from the replication destination instead of the source storage
+  instanceID: chorus # name of this proxy, unique among all proxies and kept across restarts
   cors:
     enabled: true
     allowAll: false

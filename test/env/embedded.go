@@ -182,6 +182,7 @@ func SetupEmbedded(t testing.TB, workerConf *worker.Config, proxyConf *proxy.Con
 	}
 
 	proxyConf.Auth.UseStorage = "main"
+	proxyConf.InstanceID = "test-proxy"
 	e.MainClient, e.MpMainClient = createClient(proxyConf.Storage.Storages["main"])
 	e.F1Client, e.MpF1Client = createClient(proxyConf.Storage.Storages["f1"])
 	e.F2Client, e.MpF2Client = createClient(proxyConf.Storage.Storages["f2"])

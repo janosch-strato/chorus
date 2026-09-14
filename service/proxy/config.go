@@ -61,27 +61,23 @@ type Config struct {
 	// for objects the migration has already copied. Meant for migrations away
 	// from a storage that is too slow to read from.
 	ReadFromDestination bool `yaml:"readFromDestination"`
-	// DestinationAnswerTimeout is how long such a read waits for the
-	// destination storage to answer it, connecting included, before it is
-	// read from the source storage instead. Reading the answer itself is not
-	// bounded by it. A negative value turns it off.
+	// How long such a read waits for the destination to begin answering,
+	// connecting included. Negative turns it off.
 	DestinationAnswerTimeout time.Duration `yaml:"destinationAnswerTimeout"`
-	// DestinationTimeoutLimit is how many reads in a row the destination may
-	// fail to answer in time before such reads are paused, see
-	// DestinationPause. A negative value turns the pausing off.
+	// Answer timeouts in a row before such reads are paused. Negative turns
+	// the pausing off.
 	DestinationTimeoutLimit int `yaml:"destinationTimeoutLimit"`
-	// DestinationPause is how long reads stay on the source storage once the
-	// destination reached DestinationTimeoutLimit. A negative value turns the
-	// pausing off.
+	// How long reads stay on the source once that limit is reached.
 	DestinationPause time.Duration `yaml:"destinationPause"`
+
+	// What this proxy calls itself in meta.DeleteIntent, and whose deletes it
+	// finishes on starting up. Has to survive a restart and differ from every
+	// other proxy. Required: a hostname does not survive a restart everywhere.
+	InstanceID string `yaml:"instanceID"`
 }
 
-// A destination slower than this is not the faster storage the read went to
-// it for.
 const defaultDestinationAnswerTimeout = time.Second * 5
 
-// Answer timeouts in a row that take a destination out of use, and how long
-// reads are kept off it afterwards.
 const (
 	defaultDestinationTimeoutLimit = 3
 	defaultDestinationPause        = time.Minute * 5
@@ -129,6 +125,10 @@ func (c *Config) Validate() error {
 	}
 	if c.DestinationPause == 0 {
 		c.DestinationPause = defaultDestinationPause
+	}
+
+	if c.InstanceID == "" {
+		return fmt.Errorf("proxy config: instanceID must be set")
 	}
 
 	if c.Port <= 0 {
