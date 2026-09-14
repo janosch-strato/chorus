@@ -566,3 +566,74 @@ func TestToDest(t *testing.T) {
 		})
 	}
 }
+
+// It must lose a race rather than throw away a version written while the
+// caller was making up its mind.
+func Test_DeleteObjIfUnchanged(t *testing.T) {
+	obj := dom.Object{Bucket: "bucket", Name: "obj"}
+	src, dst := ToDest("src", ""), ToDest("dst", "buck")
+
+	seeded := func(t *testing.T) (VersionService, context.Context) {
+		t.Helper()
+		s, ctx := NewVersionService(testutil.SetupRedis(t)), t.Context()
+		_, err := s.IncrementObj(ctx, obj, src)
+		require.NoError(t, err)
+		require.NoError(t, s.UpdateIfGreater(ctx, obj, dst, 1))
+		return s, ctx
+	}
+
+	t.Run("Deletes what has not changed", func(t *testing.T) {
+		r := require.New(t)
+		s, ctx := seeded(t)
+
+		read, err := s.GetObj(ctx, obj)
+		r.NoError(err)
+		deleted, err := s.DeleteObjIfUnchanged(ctx, obj, read)
+		r.NoError(err)
+		r.True(deleted)
+
+		left, err := s.GetObj(ctx, obj)
+		r.NoError(err)
+		r.Empty(left)
+	})
+
+	t.Run("Keeps a version written since the read", func(t *testing.T) {
+		r := require.New(t)
+		s, ctx := seeded(t)
+
+		read, err := s.GetObj(ctx, obj)
+		r.NoError(err)
+		_, err = s.IncrementObj(ctx, obj, src)
+		r.NoError(err)
+
+		deleted, err := s.DeleteObjIfUnchanged(ctx, obj, read)
+		r.NoError(err)
+		r.False(deleted, "a version written after the read was thrown away")
+
+		left, err := s.GetObj(ctx, obj)
+		r.NoError(err)
+		r.EqualValues(2, left[src])
+	})
+
+	t.Run("Keeps a destination that appeared since the read", func(t *testing.T) {
+		r := require.New(t)
+		s, ctx := seeded(t)
+
+		read, err := s.GetObj(ctx, obj)
+		r.NoError(err)
+		delete(read, dst)
+
+		deleted, err := s.DeleteObjIfUnchanged(ctx, obj, read)
+		r.NoError(err)
+		r.False(deleted, "a destination the caller never saw was thrown away")
+	})
+
+	t.Run("An object with no versions is already gone", func(t *testing.T) {
+		r := require.New(t)
+		s, ctx := NewVersionService(testutil.SetupRedis(t)), t.Context()
+
+		deleted, err := s.DeleteObjIfUnchanged(ctx, obj, map[Destination]int64{})
+		r.NoError(err)
+		r.True(deleted)
+	})
+}

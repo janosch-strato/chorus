@@ -18,6 +18,7 @@ package router
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,12 +27,15 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/sns"
+	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 
 	xctx "github.com/clyso/chorus/pkg/ctx"
 	"github.com/clyso/chorus/pkg/entity"
 	"github.com/clyso/chorus/pkg/meta"
 	"github.com/clyso/chorus/pkg/policy"
+	"github.com/clyso/chorus/pkg/replication"
 	"github.com/clyso/chorus/pkg/s3"
 	"github.com/clyso/chorus/pkg/s3client"
 	"github.com/clyso/chorus/pkg/tasks"
@@ -97,12 +101,44 @@ func newTestRouter(t *testing.T, client s3client.Client) *router {
 	policySvc := policy.NewService(c, nil, nil)
 	require.NoError(t, policySvc.AddBucketRoutingPolicy(ctx,
 		entity.NewBucketRoutingPolicyID(testUser, testBucket), testSource, false))
+	versionSvc := meta.NewVersionService(c)
+	routerRedis[t.Name()] = c
+	t.Cleanup(func() { delete(routerRedis, t.Name()) })
 	return &router{
-		clients:    fakeClients{c: client},
-		policySvc:  policySvc,
-		versionSvc: meta.NewVersionService(c),
-		queueSvc:   &tasks.QueueServiceMock{},
+		clients:       fakeClients{c: client},
+		policySvc:     policySvc,
+		versionSvc:    versionSvc,
+		queueSvc:      &tasks.QueueServiceMock{},
+		replSvc:       replication.New(asynq.NewClientFromRedisClient(c), versionSvc, policySvc),
+		deleteIntents: meta.NewDeleteIntents(c),
+		instanceID:    testInstance,
 	}
+}
+
+// What the router under test calls itself, see meta.DeleteIntent.
+const testInstance = "proxy-under-test"
+
+// The redis a test's router was built on.
+var routerRedis = map[string]redis.UniversalClient{}
+
+func queuedDeletes(t *testing.T, c redis.UniversalClient) []string {
+	t.Helper()
+	inspector := asynq.NewInspectorFromRedisClient(c)
+	queues, err := inspector.Queues()
+	require.NoError(t, err)
+	var objects []string
+	for _, queue := range queues {
+		infos, err := inspector.ListPendingTasks(queue)
+		require.NoError(t, err)
+		for _, info := range infos {
+			var payload tasks.ObjectSyncPayload
+			if err := json.Unmarshal(info.Payload, &payload); err != nil || !payload.Deleted {
+				continue
+			}
+			objects = append(objects, payload.Object.Name)
+		}
+	}
+	return objects
 }
 
 func deleteObjectReq(object, versionID string) *http.Request {
