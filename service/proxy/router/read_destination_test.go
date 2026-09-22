@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
+	mclient "github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/require"
 
 	xctx "github.com/clyso/chorus/pkg/ctx"
@@ -558,4 +559,30 @@ func TestCommonReadFallsBackOnABodilessAnswer(t *testing.T) {
 		_, _, _, _ = rt.commonRead(readReq(s3.HeadObject, "obj", "/"+testBucket+"/obj"))
 	}, "an answer without a body was reached into on the way to the source")
 	r.Equal(2, asked, "the read did not fall back to the source storage")
+}
+
+// A destination that says the object is not there has answered: it is reachable
+// and quick, and only a destination that says nothing is worth pausing reads to.
+func TestAnApiErrorCountsAsAnAnswer(t *testing.T) {
+	r := require.New(t)
+
+	rt := &router{
+		destinationAnswerTimeout: time.Minute,
+		destPause:                newDestinationPause(3, time.Minute),
+		clients: fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
+			// As s3client.Do returns one: an api error is an err too.
+			resp := &http.Response{StatusCode: http.StatusNotFound, Header: http.Header{}}
+			return resp, true, mclient.ToErrorResponse(mclient.ErrorResponse{Code: mclient.NoSuchKey})
+		}}},
+	}
+	// Two short of the limit, as a migration still filling the destination is.
+	rt.destPause.timedOut(testDest)
+	rt.destPause.timedOut(testDest)
+
+	_, isApiErr, _ := rt.readDestination(readReq(s3.HeadObject, "obj", "/"+testBucket+"/obj"), testDest, testBucket)
+	r.True(isApiErr)
+
+	rt.destPause.timedOut(testDest)
+	rt.destPause.timedOut(testDest)
+	r.False(rt.destPause.paused(testDest), "an answered read did not clear the timeouts before it")
 }
