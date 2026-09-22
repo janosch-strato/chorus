@@ -26,6 +26,7 @@ import (
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/hibiken/asynq"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
@@ -317,6 +318,29 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 			zerolog.Ctx(ctx).Warn().Err(err).Msg("unable to register queue depth collector")
 		}
 		zerolog.Ctx(ctx).Info().Msg("metrics enabled")
+	}
+
+	// only the worker can read the replication state, so it exports it no
+	// matter which other subsystem serves the endpoint
+	if conf.Metrics.Enabled && conf.Metrics.RedisReadInterval > 0 {
+		collector := metrics.NewReplicationCollector(policySvc, conf.Metrics.RedisReadInterval)
+		var registered prometheus.AlreadyRegisteredError
+
+		err = prometheus.Register(collector)
+		switch {
+		case errors.As(err, &registered):
+			// a second worker in this process, as the reuse port setup has
+			// it: the first one exports the state, which is the same state
+			zerolog.Ctx(ctx).Info().Msg("replication metrics are already exported")
+		case err != nil:
+			return fmt.Errorf("unable to register replication metrics: %w", err)
+		default:
+			err = server.Add("worker_replication_metrics", collector.Run,
+				func(_ context.Context) error { return nil })
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	zerolog.Ctx(ctx).Info().Msg("starting workers...")

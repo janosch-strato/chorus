@@ -8,6 +8,9 @@ log:
 metrics:
   enabled: false
   port: 9090
+  # how often the replication and queue state is read from redis for the
+  # replication_* metrics, 0 to not export them
+  redisReadInterval: 30s
 trace:
   enabled: false
   endpoint: # url to Jaeger or other open trace provider

@@ -16,7 +16,15 @@
 
 package metrics
 
+import "time"
+
 type Config struct {
 	Enabled bool `yaml:"enabled"`
 	Port    int  `yaml:"port"`
+
+	// RedisReadInterval is how often the replication and queue state is
+	// read from redis for the replication_* metrics. Reading it costs a few
+	// redis round trips per replication, so it happens on this interval and
+	// not once per scrape. Zero disables those metrics.
+	RedisReadInterval time.Duration `yaml:"redisReadInterval"`
 }
