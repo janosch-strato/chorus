@@ -95,6 +95,9 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 		}
 		internalDuration := body.internalDuration()
 		metrics.ProxyRequestInternalDuration(xctx.GetMethod(ctx).String(), storage, internalDuration)
+		// counted before the body is passed on, so that a storage answer is
+		// recorded even when the client gives up while it is being copied
+		metrics.ProxyStorageStatus(storage, resp.StatusCode)
 		w.WriteHeader(resp.StatusCode)
 		written, err := io.Copy(w, resp.Body)
 		if err != nil {

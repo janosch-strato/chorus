@@ -82,6 +82,16 @@ func Test_ProxyRequestInternalDuration(t *testing.T) {
 	r.NotNil(histogram(t, "proxy_request_internal_duration_seconds", "GetObject", "none"))
 }
 
+func Test_ProxyStorageStatus(t *testing.T) {
+	r := require.New(t)
+	ProxyStorageStatus("source", 503)
+	ProxyStorageStatus("source", 503)
+	ProxyStorageStatus("destination", 200)
+
+	r.InDelta(2, counterValue(t, proxyStorageStatus.WithLabelValues("source", "503")), 0.001)
+	r.InDelta(1, counterValue(t, proxyStorageStatus.WithLabelValues("destination", "200")), 0.001)
+}
+
 func Test_MigrationCopyPhase(t *testing.T) {
 	r := require.New(t)
 	for _, phase := range []string{"copy", "acl", "tags"} {
