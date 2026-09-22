@@ -325,8 +325,10 @@ func (r *router) readDestination(req *http.Request, destStorage, destBucket stri
 		}
 		// Join, not %w: err is nil when an answer turned up after the wait.
 		err = errors.Join(errDestinationSlow, err)
-	case err == nil:
-		// An api error is an answer too: the destination is there and quick.
+	// An api error is an answer too: the destination is there and quick. It
+	// comes back as an err, so it has to be named, or only a read that found
+	// something would count.
+	case err == nil || isApiErr:
 		if !isApiErr {
 			metrics.ProxyDestinationRead(destStorage)
 		}
