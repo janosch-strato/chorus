@@ -233,11 +233,12 @@ func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err 
 		flow := xctx.GetFlow(req.Context())
 		// Record the request with its outcome class so error counts
 		// land on storage_requests_total under the "status" label.
-		c.metricsSvc.CountStatus(flow, c.name, method, s3RequestStatus(resp, err))
+		status := s3RequestStatus(resp, err)
+		c.metricsSvc.CountStatus(flow, c.name, method, status)
+		c.metricsSvc.Duration(flow, c.name, method, status, time.Since(start))
 		if err != nil {
 			return
 		}
-		c.metricsSvc.Duration(flow, c.name, method, time.Since(start))
 		switch method {
 		case s3.GetObject:
 			if resp.ContentLength != 0 {
@@ -358,25 +359,40 @@ func (c *client) IsOnline() bool {
 // the HTTP status code, so a single err-based classification covers
 // both the explicit-error and transport-failure cases.
 func s3RequestStatus(resp *http.Response, err error) metrics.ReqStatus {
-	if err == nil {
-		switch {
-		case resp != nil && resp.StatusCode >= 500:
-			return metrics.StatusServerErr
-		case resp != nil && resp.StatusCode >= 400:
-			return metrics.StatusClientErr
-		default:
-			return metrics.StatusOK
-		}
-	}
-	if mclient.IsNetworkOrHostDown(err, false) {
-		return metrics.StatusNetworkErr
-	}
-	switch code := mclient.ToErrorResponse(err).StatusCode; {
+	// A status the storage gave, whether it came back as a response or as
+	// the api error a non-success status is turned into. Anything below 400
+	// is an answer, the odd 201 included; only the absence of one says
+	// something about the storage or about us.
+	code := ResponseStatus(resp, err)
+	switch {
 	case code >= 500:
 		return metrics.StatusServerErr
 	case code >= 400:
 		return metrics.StatusClientErr
-	default:
+	case code >= 300:
+		return metrics.StatusRedirect
+	case code > 0:
+		return metrics.StatusOK
+	case err == nil:
+		return metrics.StatusOK
+	case mclient.IsNetworkOrHostDown(err, false):
 		return metrics.StatusNetworkErr
+	default:
+		// the call never left this process, or was given up on: signing
+		// failed, the request could not be built, the context was cancelled
+		return metrics.StatusInternalErr
 	}
+}
+
+// ResponseStatus returns the http status a storage answered with, taken from
+// the response or, once a non-success status has been turned into an api
+// error, from that. Zero means the storage did not answer.
+func ResponseStatus(resp *http.Response, err error) int {
+	if resp != nil && resp.StatusCode != 0 {
+		return resp.StatusCode
+	}
+	if err == nil {
+		return 0
+	}
+	return mclient.ToErrorResponse(err).StatusCode
 }

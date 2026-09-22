@@ -17,6 +17,7 @@
 package metrics
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -46,6 +47,20 @@ var migrationCopyPhaseDuration = promauto.NewHistogramVec(prometheus.HistogramOp
 	Help:    "Time spent in the phases of an object copy task: content copy, acl sync, tag sync.",
 	Buckets: storageLatencyBuckets,
 }, []string{"phase", "from", "to"})
+
+// proxyStorageStatus is what the storage answered with, which is not what
+// proxy_response_status counts: that one is the answer the client got, from a
+// middleware that cannot see which storage was asked, and it also counts the
+// requests that never reached one.
+var proxyStorageStatus = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "proxy_storage_status_total",
+	Help: "Http status a storage answered a proxied request with, by storage.",
+}, []string{"storage", "status"})
+
+// ProxyStorageStatus counts one answer of a storage to a proxied request.
+func ProxyStorageStatus(storage string, status int) {
+	proxyStorageStatus.WithLabelValues(storage, strconv.Itoa(status)).Inc()
+}
 
 var storageInFlight = promauto.NewGaugeVec(prometheus.GaugeOpts{
 	Name: "storage_requests_in_flight",
