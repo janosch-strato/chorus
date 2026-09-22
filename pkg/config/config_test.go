@@ -3,6 +3,7 @@ package config
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -18,6 +19,10 @@ func TestGet(t *testing.T) {
 	r.EqualValues(9090, conf.Metrics.Port)
 	r.EqualValues("info", conf.Log.Level)
 	r.EqualValues(false, conf.Log.Json)
+
+	// the interval the replication state is read on has to decode as a
+	// duration
+	r.EqualValues(30*time.Second, conf.Metrics.RedisReadInterval)
 }
 
 func TestOverride(t *testing.T) {
