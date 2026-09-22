@@ -55,7 +55,7 @@ DB: `appDB`.
 
 When chorus captures bucket/object change event or syncs bucket in initial replication, it creates a task. This task contains only bucket/object id and no information about the change. Task processor then compares objects directly between source and destination and copy/remove data if needed. This makes tasks idempotent and works well with "at least once" delivery model used by many distributed queues.
 
-Additionally, Chorus using [version vectors](https://en.wikipedia.org/wiki/Version_vector) to track synced changes. When proxy or agent captures change, it increases object version in source. Later, after worker syncs change, it updates version in destination.
+Additionally, Chorus using [version vectors](https://en.wikipedia.org/wiki/Version_vector) to track synced changes. When proxy captures change, it increases object version in source. Later, after worker syncs change, it updates version in destination.
 
 Version metadata was introduced for two reasons:
 
