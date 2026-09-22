@@ -82,6 +82,16 @@ func Test_ProxyRequestInternalDuration(t *testing.T) {
 	r.NotNil(histogram(t, "proxy_request_internal_duration_seconds", "GetObject", "none"))
 }
 
+func Test_ProxyStorageStatus(t *testing.T) {
+	r := require.New(t)
+	ProxyStorageStatus("source", 503)
+	ProxyStorageStatus("source", 503)
+	ProxyStorageStatus("destination", 200)
+
+	r.InDelta(2, counterValue(t, proxyStorageStatus.WithLabelValues("source", "503")), 0.001)
+	r.InDelta(1, counterValue(t, proxyStorageStatus.WithLabelValues("destination", "200")), 0.001)
+}
+
 func Test_MigrationCopyPhase(t *testing.T) {
 	r := require.New(t)
 	for _, phase := range []string{"copy", "acl", "tags"} {
@@ -95,14 +105,24 @@ func Test_MigrationCopyPhase(t *testing.T) {
 
 func Test_S3Service_Duration(t *testing.T) {
 	r := require.New(t)
-	NewS3Service(true).Duration(xctx.Migration, "source", s3.GetObject, 11*time.Second)
+	NewS3Service(true).Duration(xctx.Migration, "source", s3.GetObject, StatusOK, 11*time.Second)
 
-	h := histogram(t, "storage_request_duration_seconds", string(xctx.Migration), "source", s3.GetObject.String())
+	h := histogram(t, "storage_request_duration_seconds", string(xctx.Migration), "source",
+		s3.GetObject.String(), string(StatusOK))
 	r.NotNil(h, "series not exported")
 	r.EqualValues(1, h.GetSampleCount())
 	r.InDelta(11, h.GetSampleSum(), 0.001)
 
+	// the calls that failed are timed too, under a status of their own, so
+	// that a slow average can be told from a fast stream of errors
+	NewS3Service(true).Duration(xctx.Migration, "source", s3.GetObject, StatusServerErr, 2*time.Second)
+	h = histogram(t, "storage_request_duration_seconds", string(xctx.Migration), "source",
+		s3.GetObject.String(), string(StatusServerErr))
+	r.NotNil(h, "the failed calls need a series of their own")
+	r.EqualValues(1, h.GetSampleCount())
+	r.InDelta(2, h.GetSampleSum(), 0.001)
+
 	// disabled service records nothing
-	NewS3Service(false).Duration(xctx.Migration, "other-storage", s3.GetObject, time.Second)
+	NewS3Service(false).Duration(xctx.Migration, "other-storage", s3.GetObject, StatusOK, time.Second)
 	r.Nil(histogram(t, "storage_request_duration_seconds", "other-storage"))
 }

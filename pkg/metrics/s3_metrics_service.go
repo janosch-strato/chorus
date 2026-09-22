@@ -29,10 +29,10 @@ import (
 var requestDuration = promauto.NewHistogramVec(
 	prometheus.HistogramOpts{
 		Name:    "storage_request_duration_seconds",
-		Help:    "Duration of api calls to s3 storage.",
+		Help:    "Duration of api calls to s3 storage, by the outcome they ended in.",
 		Buckets: storageLatencyBuckets,
 	},
-	[]string{"flow", "storage", "method"},
+	[]string{"flow", "storage", "method", "status"},
 )
 
 // ReqStatus is the bounded outcome vocabulary for the "status" label
@@ -42,10 +42,21 @@ var requestDuration = promauto.NewHistogramVec(
 type ReqStatus string
 
 const (
-	StatusOK         ReqStatus = "ok"
+	StatusOK ReqStatus = "ok"
+	// StatusRedirect is a storage pointing the request elsewhere, which
+	// chorus does not follow: a 301 for a bucket in another region, a 307
+	// while one is being created. The storage answered, but the request did
+	// not get what it asked for, so it is neither a success nor a fault of
+	// the storage.
+	StatusRedirect   ReqStatus = "redirect"
 	StatusClientErr  ReqStatus = "client_error"
 	StatusServerErr  ReqStatus = "server_error"
 	StatusNetworkErr ReqStatus = "network_error"
+	// StatusInternalErr is a call the storage never answered and never
+	// refused: it was given up on before it left, or cancelled. Kept apart
+	// from network_error so that the one class meaning "the storage is
+	// unreachable" says only that.
+	StatusInternalErr ReqStatus = "internal_error"
 )
 
 var countRequests = promauto.NewCounterVec(
@@ -115,8 +126,10 @@ type S3Service interface {
 	// so the same storage_requests_total series also carries error
 	// counts under its "status" label.
 	CountStatus(flow xctx.Flow, storage string, method s3.Method, status ReqStatus)
-	// Duration records how long a storage took to answer an api call.
-	Duration(flow xctx.Flow, storage string, method s3.Method, d time.Duration)
+	// Duration records how long a storage took to answer an api call, with
+	// the outcome it ended in: an average that mixes the calls that failed
+	// with the ones that worked explains neither.
+	Duration(flow xctx.Flow, storage string, method s3.Method, status ReqStatus, d time.Duration)
 	Upload(flow xctx.Flow, storage, bucket string, bytes int)
 	Download(flow xctx.Flow, storage, bucket string, bytes int)
 
@@ -203,11 +216,11 @@ func (s svcS3) CountStatus(flow xctx.Flow, storage string, method s3.Method, sta
 		"status":  string(status)}).Inc()
 }
 
-func (s svcS3) Duration(flow xctx.Flow, storage string, method s3.Method, d time.Duration) {
+func (s svcS3) Duration(flow xctx.Flow, storage string, method s3.Method, status ReqStatus, d time.Duration) {
 	if !s.enabled {
 		return
 	}
-	requestDuration.WithLabelValues(string(flow), storage, method.String()).Observe(d.Seconds())
+	requestDuration.WithLabelValues(string(flow), storage, method.String(), string(status)).Observe(d.Seconds())
 }
 
 func (s svcS3) Upload(flow xctx.Flow, storage, bucket string, bytes int) {
