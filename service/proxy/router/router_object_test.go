@@ -49,7 +49,7 @@ func replicatedRouter(t *testing.T) *router {
 	t.Helper()
 	rt := answeringRouter(t)
 	_, err := rt.policySvc.AddBucketReplicationPolicy(t.Context(),
-		entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket), nil)
+		entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket))
 	require.NoError(t, err)
 	return rt
 }
@@ -248,7 +248,7 @@ func TestRouteDeleteObjectVersionDoesNotDropTheMigratedRecord(t *testing.T) {
 	policySvc := policy.NewService(c, nil, nil)
 	r.NoError(policySvc.AddBucketRoutingPolicy(ctx, entity.NewBucketRoutingPolicyID(testUser, testBucket), testSource, false))
 	_, err := policySvc.AddBucketReplicationPolicy(ctx,
-		entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket), nil)
+		entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket))
 	r.NoError(err)
 
 	queueSvc := &tasks.QueueServiceMock{}

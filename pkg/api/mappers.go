@@ -52,7 +52,6 @@ func replicationToPb(id entity.ReplicationStatusID, value entity.ReplicationStat
 		InitDoneAt:      nil, //TODO: remove from api
 		LastEmittedAt:   nil, // TODO: change api to latency
 		LastProcessedAt: nil, // TODO: change api to latency
-		AgentUrl:        strPtr(value.AgentURL),
 		HasSwitch:       value.HasSwitch,
 		IsArchived:      value.IsArchived,
 		ArchivedAt:      tsToPb(value.ArchivedAt),
@@ -67,12 +66,6 @@ func toDone(in entity.QueueStats) int64 {
 	return int64(in.Done - in.Rescheduled - in.Failed)
 }
 
-func strPtr(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
 
 func pbToReplicationID(in *pb.ReplicationRequest) entity.ReplicationStatusID {
 	return entity.ReplicationStatusID{

@@ -68,22 +68,3 @@ func ProxyMiddleware(next http.Handler) http.Handler {
 		totalRequests.WithLabelValues(method.String()).Inc()
 	})
 }
-
-func AgentMiddleware(next http.Handler) http.Handler {
-	var totalRequests = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "agent_requests_total",
-			Help: "Number of requests to chorus agent.",
-		},
-		[]string{"status"},
-	)
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
-		rw := NewResponseWriter(w)
-		next.ServeHTTP(rw, r)
-		statusCode := rw.statusCode
-
-		totalRequests.WithLabelValues(strconv.Itoa(statusCode)).Inc()
-	})
-}
