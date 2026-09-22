@@ -104,6 +104,8 @@ func ToDest(storage string, bucket string) Destination {
 type VersionService interface {
 	// GetObj returns object content versions in s3 storages
 	GetObj(ctx context.Context, obj dom.Object) (map[Destination]int64, error)
+	// GetObjMany returns the versions of several objects, in their order
+	GetObjMany(ctx context.Context, objs []dom.Object) ([]map[Destination]int64, error)
 	// IncrementObj increments object content version in given storage
 	IncrementObj(ctx context.Context, obj dom.Object, dest Destination) (int64, error)
 	// UpdateIfGreater updates object content version in given storage if it is greater than previous value
@@ -164,13 +166,40 @@ func (s *versionSvc) GetObj(ctx context.Context, obj dom.Object) (map[Destinatio
 	return s.get(ctx, obj.Key())
 }
 
+// One round trip for the lot, where asking object by object is one each.
+func (s *versionSvc) GetObjMany(ctx context.Context, objs []dom.Object) ([]map[Destination]int64, error) {
+	cmds := make([]*redis.MapStringStringCmd, len(objs))
+	_, err := s.client.Pipelined(ctx, func(p redis.Pipeliner) error {
+		for i, obj := range objs {
+			cmds[i] = p.HGetAll(ctx, obj.Key())
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	versions := make([]map[Destination]int64, len(objs))
+	for i, cmd := range cmds {
+		raw, err := cmd.Result()
+		if err != nil {
+			return nil, err
+		}
+		versions[i] = parseVersions(ctx, objs[i].Key(), raw)
+	}
+	return versions, nil
+}
+
 func (s *versionSvc) get(ctx context.Context, key string) (map[Destination]int64, error) {
 	resMap, err := s.client.HGetAll(ctx, key).Result()
 	if err != nil {
 		return nil, err
 	}
+	return parseVersions(ctx, key, resMap), nil
+}
+
+func parseVersions(ctx context.Context, key string, raw map[string]string) map[Destination]int64 {
 	res := map[Destination]int64{}
-	for stor, verStr := range resMap {
+	for stor, verStr := range raw {
 		ver, err := strconv.Atoi(verStr)
 		if err != nil {
 			zerolog.Ctx(ctx).Err(err).Interface("dom_object", key).Msgf("unable to parse %q version", stor)
@@ -178,7 +207,7 @@ func (s *versionSvc) get(ctx context.Context, key string) (map[Destination]int64
 		}
 		res[Destination(stor)] = int64(ver)
 	}
-	return res, nil
+	return res
 }
 
 func (s *versionSvc) IncrementObj(ctx context.Context, obj dom.Object, dest Destination) (int64, error) {
