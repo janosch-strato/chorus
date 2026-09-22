@@ -145,15 +145,17 @@ func (r *router) deleteObject(req *http.Request) (resp *http.Response, storage s
 // write that landed since from the object it was asked to delete.
 func (r *router) intendToDelete(ctx context.Context, user, storage string, objs []dom.Object) ([]meta.DeleteIntent, error) {
 	request := xid.New().String()
+	// In one go: a multi delete names up to a thousand objects, and the client
+	// is waiting on every round trip made before the storage is even asked.
+	versions, err := r.versionSvc.GetObjMany(ctx, objs)
+	if err != nil {
+		return nil, fmt.Errorf("delete: unable to read the object versions: %w", err)
+	}
 	intents := make([]meta.DeleteIntent, 0, len(objs))
-	for _, obj := range objs {
-		versions, err := r.versionSvc.GetObj(ctx, obj)
-		if err != nil {
-			return nil, fmt.Errorf("delete: unable to read the object versions: %w", err)
-		}
+	for i, obj := range objs {
 		intents = append(intents, meta.DeleteIntent{
 			Request: request, Owner: r.instanceID, User: user, Storage: storage,
-			Object: obj, Versions: versions,
+			Object: obj, Versions: versions[i],
 		})
 	}
 	if err := r.deleteIntents.Record(ctx, intents); err != nil {

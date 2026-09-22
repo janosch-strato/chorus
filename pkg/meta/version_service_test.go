@@ -676,3 +676,39 @@ func Test_DeleteObjIfUnchanged(t *testing.T) {
 		r.True(deleted)
 	})
 }
+
+func Test_GetObjMany(t *testing.T) {
+	r := require.New(t)
+	s, ctx := NewVersionService(testutil.SetupRedis(t)), t.Context()
+	src := ToDest("src", "")
+
+	one := dom.Object{Bucket: "bucket", Name: "one"}
+	three := dom.Object{Bucket: "bucket", Name: "three"}
+	_, err := s.IncrementObj(ctx, one, src)
+	r.NoError(err)
+	for range 3 {
+		_, err = s.IncrementObj(ctx, three, src)
+		r.NoError(err)
+	}
+
+	// The middle one was never written, so it stands for every object a
+	// multi delete names that chorus has no versions for.
+	objs := []dom.Object{one, {Bucket: "bucket", Name: "none"}, three}
+	versions, err := s.GetObjMany(ctx, objs)
+	r.NoError(err)
+	r.Len(versions, len(objs), "the answers did not line up with what was asked")
+	r.EqualValues(1, versions[0][src])
+	r.Empty(versions[1])
+	r.EqualValues(3, versions[2][src])
+
+	// Whatever GetObj says, one at a time.
+	for i, obj := range objs {
+		one, err := s.GetObj(ctx, obj)
+		r.NoError(err)
+		r.Equal(one, versions[i])
+	}
+
+	none, err := s.GetObjMany(ctx, nil)
+	r.NoError(err)
+	r.Empty(none)
+}
