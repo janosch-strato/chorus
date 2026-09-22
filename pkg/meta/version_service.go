@@ -47,7 +47,8 @@ else
 	redis.call("hset", KEYS[1], ARGV[1], ARGV[2]);
 	return 1
 end`)
-	// args = the field/value pairs the caller last read, flattened.
+	// keys = the object's versions, then its acl's and its tagging's, which
+	// go with it. args = the field/value pairs the caller last read, flattened.
 	luaDelIfUnchanged = redis.NewScript(`local expected = {}
 local want = 0
 for i = 1, #ARGV, 2 do
@@ -62,7 +63,7 @@ for i = 1, #cur, 2 do
 	seen = seen + 1
 end
 if seen ~= want then return 0 end
-redis.call('DEL', KEYS[1])
+redis.call('DEL', KEYS[1], KEYS[2], KEYS[3])
 return 1`)
 
 	luaDelKeysWithPrefix = redis.NewScript(`local cursor = tonumber(ARGV[1]) or 0
@@ -238,7 +239,8 @@ func (s *versionSvc) DeleteObjIfUnchanged(ctx context.Context, obj dom.Object, e
 	for dest, version := range expected {
 		argv = append(argv, string(dest), strconv.FormatInt(version, 10))
 	}
-	deleted, err := luaDelIfUnchanged.Run(ctx, s.client, []string{obj.Key()}, argv...).Int64()
+	keys := []string{obj.Key(), obj.ACLKey(), obj.TagKey()}
+	deleted, err := luaDelIfUnchanged.Run(ctx, s.client, keys, argv...).Int64()
 	if err != nil {
 		return false, err
 	}
