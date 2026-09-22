@@ -83,7 +83,7 @@ func Test_router_destinationReadRoute(t *testing.T) {
 	replID := entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket)
 	policySvc := policy.NewService(c, nil, nil)
 	require.NoError(t, policySvc.AddBucketRoutingPolicy(ctx, entity.NewBucketRoutingPolicyID(testUser, testBucket), testSource, false))
-	_, err := policySvc.AddBucketReplicationPolicy(ctx, replID, nil)
+	_, err := policySvc.AddBucketReplicationPolicy(ctx, replID)
 	require.NoError(t, err)
 	// the initial sync is running: the migrated records decide
 	require.NoError(t, policySvc.ListingDone(ctx, replID))
@@ -259,7 +259,7 @@ func Test_router_destinationReadRoute(t *testing.T) {
 	t.Run("bucket with several destinations is read from source", func(t *testing.T) {
 		r := require.New(t)
 		object := "migrated"
-		_, err := policySvc.AddBucketReplicationPolicy(ctx, entity.NewReplicationStatusID(testUser, testSource, testBucket, "dst2", testBucket), nil)
+		_, err := policySvc.AddBucketReplicationPolicy(ctx, entity.NewReplicationStatusID(testUser, testSource, testBucket, "dst2", testBucket))
 		r.NoError(err)
 
 		_, _, reason := rt.destinationReadDecision(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
@@ -359,7 +359,7 @@ func Test_router_adjustObjReadRoute_reportsSwitchInProgress(t *testing.T) {
 	policySvc := policy.NewService(c, queueSvc, nil)
 	replID := entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket)
 	r.NoError(policySvc.AddBucketRoutingPolicy(ctx, entity.NewBucketRoutingPolicyID(testUser, testBucket), testSource, true))
-	_, err := policySvc.AddBucketReplicationPolicy(ctx, replID, nil)
+	_, err := policySvc.AddBucketReplicationPolicy(ctx, replID)
 	r.NoError(err)
 	queueSvc.InitReplicationInProgress(replID)
 	r.NoError(policySvc.ListingDone(ctx, replID))
@@ -570,7 +570,7 @@ func TestCommonReadFallsBackOnABodilessAnswer(t *testing.T) {
 	r.NoError(policySvc.AddBucketRoutingPolicy(ctx,
 		entity.NewBucketRoutingPolicyID(testUser, testBucket), testSource, false))
 	replID := entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket)
-	_, err := policySvc.AddBucketReplicationPolicy(ctx, replID, nil)
+	_, err := policySvc.AddBucketReplicationPolicy(ctx, replID)
 	r.NoError(err)
 	r.NoError(policySvc.ListingDone(ctx, replID))
 

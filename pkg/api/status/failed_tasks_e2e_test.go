@@ -68,7 +68,7 @@ func setupE2E(t *testing.T) *e2eEnv {
 		ToBucket:    "my-bucket",
 	}
 
-	_, err := policySvc.AddBucketReplicationPolicy(t.Context(), replID, nil)
+	_, err := policySvc.AddBucketReplicationPolicy(t.Context(), replID)
 	require.NoError(t, err, "seed replication policy")
 
 	conf := Config{
@@ -100,7 +100,7 @@ func (e *e2eEnv) reset(t *testing.T) {
 	t.Helper()
 	ctx := t.Context()
 	require.NoError(t, e.redisClient.FlushAll(ctx).Err())
-	_, err := e.policySvc.AddBucketReplicationPolicy(ctx, e.replID, nil)
+	_, err := e.policySvc.AddBucketReplicationPolicy(ctx, e.replID)
 	require.NoError(t, err, "re-seed replication policy")
 }
 

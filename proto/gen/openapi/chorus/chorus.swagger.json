@@ -16,28 +16,6 @@
     "application/json"
   ],
   "paths": {
-    "/agents": {
-      "get": {
-        "operationId": "Chorus_GetAgents",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/chorusGetAgentsResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/googlerpcStatus"
-            }
-          }
-        },
-        "tags": [
-          "Chorus"
-        ]
-      }
-    },
     "/consistency/delete": {
       "put": {
         "operationId": "Chorus_DeleteConsistencyCheckReport",
@@ -760,10 +738,6 @@
         "toBucket": {
           "type": "string",
           "title": "custom destination bucket name. if not set, destination bucket name will be equal to source bucket"
-        },
-        "agentUrl": {
-          "type": "string",
-          "description": "webhook URL of chorus agent. Required if chorus agent setup is used."
         }
       }
     },
@@ -788,21 +762,7 @@
         "isForAllBuckets": {
           "type": "boolean"
         },
-        "agentUrl": {
-          "type": "string"
-        },
         "toBucket": {
-          "type": "string"
-        }
-      }
-    },
-    "chorusAgent": {
-      "type": "object",
-      "properties": {
-        "storage": {
-          "type": "string"
-        },
-        "url": {
           "type": "string"
         }
       }
@@ -961,18 +921,6 @@
         },
         "deleteBucketReplications": {
           "type": "boolean"
-        }
-      }
-    },
-    "chorusGetAgentsResponse": {
-      "type": "object",
-      "properties": {
-        "agents": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/chorusAgent"
-          }
         }
       }
     },
@@ -1246,9 +1194,6 @@
         "lastProcessedAt": {
           "type": "string",
           "format": "date-time"
-        },
-        "agentUrl": {
-          "type": "string"
         },
         "toBucket": {
           "type": "string"

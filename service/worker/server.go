@@ -40,7 +40,6 @@ import (
 	"github.com/clyso/chorus/pkg/log"
 	"github.com/clyso/chorus/pkg/meta"
 	"github.com/clyso/chorus/pkg/metrics"
-	"github.com/clyso/chorus/pkg/notifications"
 	"github.com/clyso/chorus/pkg/policy"
 	"github.com/clyso/chorus/pkg/ratelimit"
 	"github.com/clyso/chorus/pkg/rclone"
@@ -260,7 +259,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	}
 
 	if conf.Api.Enabled {
-		handlers := api.GrpcHandlers(conf.Storage, s3Clients, taskClient, rc, policySvc, versionSvc, storageSvc, rpc.NewProxyClient(appRedis), rpc.NewAgentClient(appRedis), notifications.NewService(s3Clients), replicationStatusLocker, userLocker, &app)
+		handlers := api.GrpcHandlers(conf.Storage, s3Clients, taskClient, rc, policySvc, versionSvc, storageSvc, rpc.NewProxyClient(appRedis), replicationStatusLocker, userLocker, &app)
 		start, stop, err := api.NewGrpcServer(conf.Api.GrpcPort, handlers, tp, conf.Log, conf.Api, app)
 		if err != nil {
 			return err

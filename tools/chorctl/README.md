@@ -32,7 +32,6 @@ Usage:
   chorctl [command]
 
 Available Commands:
-  agent       Prints information about registered notification agents
   check       Checks the files in the source and destination match.
   completion  Generate the autocompletion script for the specified shell
   dash        Open migration interactive dashboard

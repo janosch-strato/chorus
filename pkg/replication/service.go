@@ -367,7 +367,7 @@ func (s *svc) getReplicationPolicy(ctx context.Context, task tasks.SyncTask) (*e
 			FromBucket:  bucket,
 			ToBucket:    toBucket,
 		}
-		newDest, err := s.policySvc.AddBucketReplicationPolicy(ctx, replicationID, nil)
+		newDest, err := s.policySvc.AddBucketReplicationPolicy(ctx, replicationID)
 		if err != nil {
 			zerolog.Ctx(ctx).Error().Err(err).Msg("AddBucketReplicationPolicy FAILED")
 			if errors.Is(err, dom.ErrAlreadyExists) {

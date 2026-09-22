@@ -105,7 +105,7 @@ func (m *policyServiceMock) DeleteUserReplication(context.Context, string, entit
 	panic("not implemented")
 }
 
-func (m *policyServiceMock) AddBucketReplicationPolicy(context.Context, entity.ReplicationStatusID, *string) (entity.ReplicationPolicyDestination, error) {
+func (m *policyServiceMock) AddBucketReplicationPolicy(context.Context, entity.ReplicationStatusID) (entity.ReplicationPolicyDestination, error) {
 	panic("not implemented")
 }
 

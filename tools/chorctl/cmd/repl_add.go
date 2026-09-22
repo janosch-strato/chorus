@@ -31,7 +31,6 @@ var (
 	raFrom     string
 	raTo       string
 	raUser     string
-	raAgentURL string
 	raBucket   string
 	raToBucket string
 )
@@ -69,9 +68,6 @@ chorctl repl add -f main -t follower -u admin -b src-bucket --to-buckt=dest-buck
 			FromBucket:  raBucket,
 			ToBucket:    raToBucket,
 		}
-		if raAgentURL != "" {
-			req.AgentUrl = &raAgentURL
-		}
 		if raToBucket == "" {
 			req.ToBucket = raBucket
 		}
@@ -88,7 +84,6 @@ func init() {
 	addCmd.Flags().StringVarP(&raFrom, "from", "f", "", "from storage")
 	addCmd.Flags().StringVarP(&raTo, "to", "t", "", "to storage")
 	addCmd.Flags().StringVarP(&raUser, "user", "u", "", "storage user")
-	addCmd.Flags().StringVar(&raAgentURL, "agent-url", "", "notifications agent url")
 	addCmd.Flags().StringVarP(&raBucket, "bucket", "b", "", "bucket name to replicate")
 	addCmd.Flags().StringVar(&raToBucket, "to-bucket", "", "custom destinatin bucket name. Set if destination bucket should have different name from source bucket")
 	err := addCmd.MarkFlagRequired("from")

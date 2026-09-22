@@ -153,7 +153,7 @@ func createReplication(
 			ToStorage:   to,
 			ToBucket:    toBucket,
 		}
-		_, err = policySvc.AddBucketReplicationPolicy(ctx, replicationID, nil)
+		_, err = policySvc.AddBucketReplicationPolicy(ctx, replicationID)
 		if err != nil {
 			if errors.Is(err, dom.ErrAlreadyExists) {
 				continue

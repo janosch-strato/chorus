@@ -39,7 +39,7 @@ func Test_endInitialSync(t *testing.T) {
 	policySvc := policy.NewService(c, queueSvc, nil)
 	storageSvc := storage.New(c)
 	r.NoError(policySvc.AddBucketRoutingPolicy(ctx, entity.NewBucketRoutingPolicyID(id.User, id.FromBucket), id.FromStorage, false))
-	_, err := policySvc.AddBucketReplicationPolicy(ctx, id, nil)
+	_, err := policySvc.AddBucketReplicationPolicy(ctx, id)
 	r.NoError(err)
 	r.NoError(storageSvc.SetMigratedObj(ctx, id, "copied"))
 
