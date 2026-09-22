@@ -37,7 +37,6 @@ const (
 	Chorus_GetBucketSwitchStatus_FullMethodName            = "/chorus.Chorus/GetBucketSwitchStatus"
 	Chorus_ListReplicationSwitches_FullMethodName          = "/chorus.Chorus/ListReplicationSwitches"
 	Chorus_CompareBucket_FullMethodName                    = "/chorus.Chorus/CompareBucket"
-	Chorus_GetAgents_FullMethodName                        = "/chorus.Chorus/GetAgents"
 	Chorus_AddBucketReplication_FullMethodName             = "/chorus.Chorus/AddBucketReplication"
 	Chorus_GetReplication_FullMethodName                   = "/chorus.Chorus/GetReplication"
 	Chorus_StartConsistencyCheck_FullMethodName            = "/chorus.Chorus/StartConsistencyCheck"
@@ -91,14 +90,14 @@ type ChorusClient interface {
 	SwitchBucket(ctx context.Context, in *SwitchBucketRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Deletes Switch with following implications:
 	// !!!Use with caution for ZeroDowntime switch.
-	// - If switch was in not_started, error, or skipped state, it will not be attempted anymore.
-	//   proxy will route all requests to old bucket.
-	// - If switch was in progress, it will be aborted. For downtime switch, bucket block will be removed
-	//   proxy will route all requests to old bucket, no data will be lost.
-	//   !!!For ZeroDowntime switch, routing will be reverted back to old bucket.
-	//   Old and new buckets may end up in inconsistent state because all object writes happened
-	//   since start of no_downtime migration were routed only to new bucket.
-	// - If switch was done. Only switch metadata will be removed, replication or routing will not be affected.
+	//   - If switch was in not_started, error, or skipped state, it will not be attempted anymore.
+	//     proxy will route all requests to old bucket.
+	//   - If switch was in progress, it will be aborted. For downtime switch, bucket block will be removed
+	//     proxy will route all requests to old bucket, no data will be lost.
+	//     !!!For ZeroDowntime switch, routing will be reverted back to old bucket.
+	//     Old and new buckets may end up in inconsistent state because all object writes happened
+	//     since start of no_downtime migration were routed only to new bucket.
+	//   - If switch was done. Only switch metadata will be removed, replication or routing will not be affected.
 	DeleteBucketSwitch(ctx context.Context, in *ReplicationRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Returns Switch status
 	GetBucketSwitchStatus(ctx context.Context, in *ReplicationRequest, opts ...grpc.CallOption) (*GetBucketSwitchStatusResponse, error)
@@ -106,7 +105,6 @@ type ChorusClient interface {
 	ListReplicationSwitches(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListSwitchResponse, error)
 	// Compares contents of given bucket in given storages
 	CompareBucket(ctx context.Context, in *CompareBucketRequest, opts ...grpc.CallOption) (*CompareBucketResponse, error)
-	GetAgents(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetAgentsResponse, error)
 	AddBucketReplication(ctx context.Context, in *AddBucketReplicationRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	GetReplication(ctx context.Context, in *ReplicationRequest, opts ...grpc.CallOption) (*Replication, error)
 	StartConsistencyCheck(ctx context.Context, in *ConsistencyCheckRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
@@ -303,16 +301,6 @@ func (c *chorusClient) CompareBucket(ctx context.Context, in *CompareBucketReque
 	return out, nil
 }
 
-func (c *chorusClient) GetAgents(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetAgentsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetAgentsResponse)
-	err := c.cc.Invoke(ctx, Chorus_GetAgents_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *chorusClient) AddBucketReplication(ctx context.Context, in *AddBucketReplicationRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
@@ -427,14 +415,14 @@ type ChorusServer interface {
 	SwitchBucket(context.Context, *SwitchBucketRequest) (*emptypb.Empty, error)
 	// Deletes Switch with following implications:
 	// !!!Use with caution for ZeroDowntime switch.
-	// - If switch was in not_started, error, or skipped state, it will not be attempted anymore.
-	//   proxy will route all requests to old bucket.
-	// - If switch was in progress, it will be aborted. For downtime switch, bucket block will be removed
-	//   proxy will route all requests to old bucket, no data will be lost.
-	//   !!!For ZeroDowntime switch, routing will be reverted back to old bucket.
-	//   Old and new buckets may end up in inconsistent state because all object writes happened
-	//   since start of no_downtime migration were routed only to new bucket.
-	// - If switch was done. Only switch metadata will be removed, replication or routing will not be affected.
+	//   - If switch was in not_started, error, or skipped state, it will not be attempted anymore.
+	//     proxy will route all requests to old bucket.
+	//   - If switch was in progress, it will be aborted. For downtime switch, bucket block will be removed
+	//     proxy will route all requests to old bucket, no data will be lost.
+	//     !!!For ZeroDowntime switch, routing will be reverted back to old bucket.
+	//     Old and new buckets may end up in inconsistent state because all object writes happened
+	//     since start of no_downtime migration were routed only to new bucket.
+	//   - If switch was done. Only switch metadata will be removed, replication or routing will not be affected.
 	DeleteBucketSwitch(context.Context, *ReplicationRequest) (*emptypb.Empty, error)
 	// Returns Switch status
 	GetBucketSwitchStatus(context.Context, *ReplicationRequest) (*GetBucketSwitchStatusResponse, error)
@@ -442,7 +430,6 @@ type ChorusServer interface {
 	ListReplicationSwitches(context.Context, *emptypb.Empty) (*ListSwitchResponse, error)
 	// Compares contents of given bucket in given storages
 	CompareBucket(context.Context, *CompareBucketRequest) (*CompareBucketResponse, error)
-	GetAgents(context.Context, *emptypb.Empty) (*GetAgentsResponse, error)
 	AddBucketReplication(context.Context, *AddBucketReplicationRequest) (*emptypb.Empty, error)
 	GetReplication(context.Context, *ReplicationRequest) (*Replication, error)
 	StartConsistencyCheck(context.Context, *ConsistencyCheckRequest) (*emptypb.Empty, error)
@@ -509,9 +496,6 @@ func (UnimplementedChorusServer) ListReplicationSwitches(context.Context, *empty
 }
 func (UnimplementedChorusServer) CompareBucket(context.Context, *CompareBucketRequest) (*CompareBucketResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CompareBucket not implemented")
-}
-func (UnimplementedChorusServer) GetAgents(context.Context, *emptypb.Empty) (*GetAgentsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetAgents not implemented")
 }
 func (UnimplementedChorusServer) AddBucketReplication(context.Context, *AddBucketReplicationRequest) (*emptypb.Empty, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddBucketReplication not implemented")
@@ -853,24 +837,6 @@ func _Chorus_CompareBucket_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Chorus_GetAgents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(emptypb.Empty)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ChorusServer).GetAgents(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Chorus_GetAgents_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ChorusServer).GetAgents(ctx, req.(*emptypb.Empty))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _Chorus_AddBucketReplication_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AddBucketReplicationRequest)
 	if err := dec(in); err != nil {
@@ -1067,10 +1033,6 @@ var Chorus_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CompareBucket",
 			Handler:    _Chorus_CompareBucket_Handler,
-		},
-		{
-			MethodName: "GetAgents",
-			Handler:    _Chorus_GetAgents_Handler,
 		},
 		{
 			MethodName: "AddBucketReplication",

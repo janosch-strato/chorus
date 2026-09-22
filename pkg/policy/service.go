@@ -75,7 +75,7 @@ type Service interface {
 	AddUserReplicationPolicy(ctx context.Context, user string, policy entity.UserReplicationPolicy) error
 	DeleteUserReplication(ctx context.Context, user string, policy entity.UserReplicationPolicy) error
 
-	AddBucketReplicationPolicy(ctx context.Context, id entity.ReplicationStatusID, agentURL *string) (entity.ReplicationPolicyDestination, error)
+	AddBucketReplicationPolicy(ctx context.Context, id entity.ReplicationStatusID) (entity.ReplicationPolicyDestination, error)
 	GetReplicationPolicyInfo(ctx context.Context, id entity.ReplicationStatusID) (entity.ReplicationStatus, error)
 	GetReplicationPolicyInfoExtended(ctx context.Context, id entity.ReplicationStatusID) (entity.ReplicationStatusExtended, error)
 	ListReplicationPolicyInfo(ctx context.Context) (map[entity.ReplicationStatusID]entity.ReplicationStatusExtended, error)
@@ -578,7 +578,7 @@ func (r *policySvc) DeleteBucketReplicationsByUser(ctx context.Context, user, fr
 	return deleted, nil
 }
 
-func (r *policySvc) AddBucketReplicationPolicy(ctx context.Context, id entity.ReplicationStatusID, agentURL *string) (entity.ReplicationPolicyDestination, error) {
+func (r *policySvc) AddBucketReplicationPolicy(ctx context.Context, id entity.ReplicationStatusID) (entity.ReplicationPolicyDestination, error) {
 	if err := validate.ReplicationStatusID(id); err != nil {
 		return entity.ReplicationPolicyDestination{}, fmt.Errorf("unable to validate replication status id: %w", err)
 	}
@@ -619,7 +619,6 @@ func (r *policySvc) AddBucketReplicationPolicy(ctx context.Context, id entity.Re
 
 	status := entity.ReplicationStatus{
 		CreatedAt: time.Now().UTC(),
-		AgentURL:  fromStrPtr(agentURL),
 	}
 	if err := r.replicationStatusStore.Set(ctx, id, status); err != nil {
 		return entity.ReplicationPolicyDestination{}, fmt.Errorf("unable to set replication status: %w", err)
@@ -632,12 +631,6 @@ func (r *policySvc) AddBucketReplicationPolicy(ctx context.Context, id entity.Re
 	return entity.NewBucketReplicationPolicyDestination(id.ToStorage, id.ToBucket), nil
 }
 
-func fromStrPtr(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
-}
 
 func (r *policySvc) PauseReplication(ctx context.Context, id entity.ReplicationStatusID) error {
 	if err := validate.ReplicationStatusID(id); err != nil {

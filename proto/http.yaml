@@ -21,8 +21,6 @@ http:
       get: /storage
     - selector: chorus.Chorus.GetProxyCredentials
       get: /proxy
-    - selector: chorus.Chorus.GetAgents
-      get: /agents
     - selector: chorus.Chorus.ListBucketsForReplication
       post: /replication/list-buckets
       body: "*"

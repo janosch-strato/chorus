@@ -34,7 +34,6 @@ import (
 	"github.com/clyso/chorus/pkg/entity"
 	"github.com/clyso/chorus/pkg/log"
 	"github.com/clyso/chorus/pkg/meta"
-	"github.com/clyso/chorus/pkg/notifications"
 	"github.com/clyso/chorus/pkg/policy"
 	"github.com/clyso/chorus/pkg/rclone"
 	"github.com/clyso/chorus/pkg/rpc"
@@ -54,8 +53,8 @@ const (
 
 func GrpcHandlers(storages *s3.StorageConfig, s3clients s3client.Service, taskClient *asynq.Client,
 	rclone rclone.Service, policySvc policy.Service, versionSvc meta.VersionService,
-	storageSvc storage.Service, proxyClient rpc.Proxy, agentClient *rpc.AgentClient,
-	notificationSvc *notifications.Service, replicationStatusLocker *store.ReplicationStatusLocker,
+	storageSvc storage.Service, proxyClient rpc.Proxy,
+	replicationStatusLocker *store.ReplicationStatusLocker,
 	userLocker *store.UserLocker, appInfo *dom.AppInfo) pb.ChorusServer {
 	return &handlers{
 		storages:                storages,
@@ -66,8 +65,6 @@ func GrpcHandlers(storages *s3.StorageConfig, s3clients s3client.Service, taskCl
 		versionSvc:              versionSvc,
 		storageSvc:              storageSvc,
 		proxyClient:             proxyClient,
-		agentClient:             agentClient,
-		notificationSvc:         notificationSvc,
 		replicationStatusLocker: replicationStatusLocker,
 		userLocker:              userLocker,
 		appInfo:                 appInfo,
@@ -85,8 +82,6 @@ type handlers struct {
 	versionSvc              meta.VersionService
 	storageSvc              storage.Service
 	proxyClient             rpc.Proxy
-	agentClient             *rpc.AgentClient
-	notificationSvc         *notifications.Service
 	appInfo                 *dom.AppInfo
 	replicationStatusLocker *store.ReplicationStatusLocker
 	userLocker              *store.UserLocker
@@ -431,10 +426,6 @@ func (h *handlers) AddReplication(ctx context.Context, req *pb.AddReplicationReq
 		if err != nil {
 			return err
 		}
-		// validate agentURL
-		if err = h.validateAgentURL(ctx, req.From, req.AgentUrl); err != nil {
-			return err
-		}
 		// validate buckets
 		for _, bucket := range req.Buckets {
 			ok, err := client.S3().BucketExists(ctx, bucket)
@@ -464,16 +455,11 @@ func (h *handlers) AddReplication(ctx context.Context, req *pb.AddReplicationReq
 				ToStorage:   req.To,
 				ToBucket:    bucket,
 			}
-			_, err = h.policySvc.AddBucketReplicationPolicy(ctx, replicationID, req.AgentUrl)
+			_, err = h.policySvc.AddBucketReplicationPolicy(ctx, replicationID)
 			if err != nil {
 				if errors.Is(err, dom.ErrAlreadyExists) {
 					continue
 				}
-				return err
-			}
-			// create bucket notification for agent:
-			err = h.createAgentBucketNotification(ctx, replicationID, req.AgentUrl)
-			if err != nil {
 				return err
 			}
 			task, err := tasks.NewReplicationTask(ctx, replicationID, tasks.BucketCreatePayload{
@@ -502,9 +488,6 @@ func (h *handlers) AddReplication(ctx context.Context, req *pb.AddReplicationReq
 }
 
 func (h *handlers) addUserReplication(ctx context.Context, req *pb.AddReplicationRequest) error {
-	if req.AgentUrl != nil && *req.AgentUrl != "" {
-		return fmt.Errorf("%w: agentUrl is not supported for user replication", dom.ErrInvalidArg)
-	}
 	route, err := h.policySvc.GetUserRoutingPolicy(ctx, req.User)
 	if err == nil && route != req.From {
 		return fmt.Errorf("%w: from storage %s is different from routing policy storage %s", dom.ErrInvalidArg, req.From, route)
@@ -534,7 +517,7 @@ func (h *handlers) addUserReplication(ctx context.Context, req *pb.AddReplicatio
 			ToStorage:   req.To,
 			ToBucket:    bucket.Name,
 		}
-		_, err = h.policySvc.AddBucketReplicationPolicy(ctx, replicationID, nil)
+		_, err = h.policySvc.AddBucketReplicationPolicy(ctx, replicationID)
 		if err != nil {
 			if errors.Is(err, dom.ErrAlreadyExists) {
 				continue
@@ -633,10 +616,6 @@ func (h *handlers) DeleteUserReplication(ctx context.Context, req *pb.DeleteUser
 			err = h.storageSvc.DelAllPendingDeleteObjs(ctx, id)
 			if err != nil {
 				zerolog.Ctx(ctx).Err(err).Msg("unable to delete pending delete records")
-			}
-			err = h.notificationSvc.DeleteBucketNotification(ctx, req.From, req.User, id.FromBucket)
-			if err != nil {
-				zerolog.Ctx(ctx).Err(err).Msg("unable to delete agent bucket notification")
 			}
 		}
 		return nil
@@ -739,21 +718,6 @@ func (h *handlers) StreamBucketReplication(req *pb.ReplicationRequest, server pb
 	}
 }
 
-func (h *handlers) GetAgents(ctx context.Context, _ *emptypb.Empty) (*pb.GetAgentsResponse, error) {
-	agents, err := h.agentClient.Ping(ctx)
-	if err != nil {
-		return nil, err
-	}
-	res := make([]*pb.Agent, len(agents))
-	for i, agent := range agents {
-		res[i] = &pb.Agent{
-			Storage: agent.FromStorage,
-			Url:     agent.URL,
-		}
-	}
-	return &pb.GetAgentsResponse{Agents: res}, nil
-}
-
 func (h *handlers) AddBucketReplication(ctx context.Context, req *pb.AddBucketReplicationRequest) (*emptypb.Empty, error) {
 	// validate
 	if _, ok := h.storages.Storages[req.FromStorage]; !ok {
@@ -777,10 +741,6 @@ func (h *handlers) AddBucketReplication(ctx context.Context, req *pb.AddBucketRe
 		if err != nil {
 			return err
 		}
-		// validate agentURL
-		if err = h.validateAgentURL(ctx, req.FromStorage, req.AgentUrl); err != nil {
-			return err
-		}
 
 		// check if bucket exists in source
 		ok, err := client.S3().BucketExists(ctx, req.FromBucket)
@@ -799,12 +759,7 @@ func (h *handlers) AddBucketReplication(ctx context.Context, req *pb.AddBucketRe
 			ToBucket:    req.ToBucket,
 		}
 		// create policy:
-		_, err = h.policySvc.AddBucketReplicationPolicy(ctx, replicationID, req.AgentUrl)
-		if err != nil {
-			return err
-		}
-		// create bucket notification for agent:
-		err = h.createAgentBucketNotification(ctx, replicationID, req.AgentUrl)
+		_, err = h.policySvc.AddBucketReplicationPolicy(ctx, replicationID)
 		if err != nil {
 			return err
 		}
@@ -831,46 +786,6 @@ func (h *handlers) AddBucketReplication(ctx context.Context, req *pb.AddBucketRe
 		return nil, err
 	}
 	return &emptypb.Empty{}, nil
-}
-
-func (h *handlers) validateAgentURL(ctx context.Context, fromStorage string, agentURL *string) error {
-	if agentURL == nil || *agentURL == "" {
-		// agent is not set
-		return nil
-	}
-
-	agents, err := h.agentClient.Ping(ctx)
-	if err != nil {
-		return err
-	}
-	for _, agent := range agents {
-		if agent.URL != *agentURL {
-			continue
-		}
-		if agent.FromStorage != fromStorage {
-			return fmt.Errorf("%w: from storage %s is different from agent storage %s", dom.ErrInvalidArg, fromStorage, agent.FromStorage)
-		}
-		// valid
-		return nil
-	}
-	return fmt.Errorf("%w: agent not found", dom.ErrInvalidArg)
-}
-
-func (h *handlers) createAgentBucketNotification(ctx context.Context, replicationID entity.ReplicationStatusID, agentURL *string) error {
-	if agentURL == nil || *agentURL == "" {
-		// agent is not set
-		return nil
-	}
-	// create a topic and bucket notification for agent event source.
-	err := h.notificationSvc.SubscribeToBucketNotifications(ctx, replicationID.FromStorage, replicationID.User, replicationID.FromBucket, *agentURL)
-	if err != nil {
-		cleanupErr := h.policySvc.DropReplicationRecords(context.Background(), replicationID)
-		if cleanupErr != nil {
-			zerolog.Ctx(ctx).Err(cleanupErr).Msgf("unable to cleanup replication policy for bucket %s", replicationID.FromBucket)
-		}
-		return err
-	}
-	return nil
 }
 
 func (h *handlers) GetReplication(ctx context.Context, req *pb.ReplicationRequest) (*pb.Replication, error) {

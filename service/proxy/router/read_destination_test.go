@@ -18,12 +18,17 @@ package router
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/hibiken/asynq"
 	"github.com/stretchr/testify/require"
 
 	xctx "github.com/clyso/chorus/pkg/ctx"
@@ -32,9 +37,6 @@ import (
 	"github.com/clyso/chorus/pkg/meta"
 	"github.com/clyso/chorus/pkg/policy"
 	"github.com/clyso/chorus/pkg/s3"
-	"github.com/clyso/chorus/pkg/settings"
-	"github.com/clyso/chorus/pkg/storage"
-	"github.com/clyso/chorus/pkg/store"
 	"github.com/clyso/chorus/pkg/tasks"
 	"github.com/clyso/chorus/pkg/testutil"
 )
@@ -56,47 +58,35 @@ func readReq(method s3.Method, object, target string) *http.Request {
 	return req.WithContext(ctx)
 }
 
-// setMigrated records the object as copied by the migration.
-func setMigrated(t *testing.T, storageSvc storage.Service, object string) {
-	id := entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket)
-	require.NoError(t, storageSvc.SetMigratedObj(t.Context(), id, object))
-}
-
-// liveSync ends the initial sync of the replication the way the last copy of
-// it does, and puts it back for the cases that follow.
-func liveSync(t *testing.T, ctx context.Context, c redis.UniversalClient, policySvc policy.Service, id entity.ReplicationStatusID) {
-	require.NoError(t, policySvc.LiveSyncStarted(ctx, id))
-	key, err := store.NewReplicationStatusStore(c).MakeKey(id)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, c.HSet(ctx, key, "live_sync", false).Err()) })
+// setCopyState puts the object copy task of the migration into the given state.
+func setCopyState(queueSvc *tasks.QueueServiceMock, object string, state asynq.TaskState) {
+	dest := entity.NewBucketReplicationPolicyDestination(testDest, testBucket)
+	queue, taskID := migrationCopyTask(testSource, testUser, testBucket, object, dest)
+	queueSvc.SetTaskState(queue, taskID, state)
 }
 
 func Test_router_destinationReadRoute(t *testing.T) {
 	ctx := t.Context()
 	c := testutil.SetupRedis(t)
 
-	replID := entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket)
 	policySvc := policy.NewService(c, nil, nil)
 	require.NoError(t, policySvc.AddBucketRoutingPolicy(ctx, entity.NewBucketRoutingPolicyID(testUser, testBucket), testSource, false))
-	_, err := policySvc.AddBucketReplicationPolicy(ctx, replID, nil)
+	_, err := policySvc.AddBucketReplicationPolicy(ctx, entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket))
 	require.NoError(t, err)
-	// the initial sync is running: the migrated records decide
-	require.NoError(t, policySvc.ListingDone(ctx, replID))
 
 	versionSvc := meta.NewVersionService(c)
-	storageSvc := storage.New(c)
-	require.NoError(t, settings.ReadFromDestination.Set(true))
-	t.Cleanup(func() { require.NoError(t, settings.ReadFromDestination.Set(false)) })
+	queueSvc := &tasks.QueueServiceMock{}
 	rt := &router{
-		policySvc:  policySvc,
-		versionSvc: versionSvc,
-		storageSvc: storageSvc,
+		policySvc:           policySvc,
+		versionSvc:          versionSvc,
+		queueSvc:            queueSvc,
+		readFromDestination: true,
 	}
 
 	t.Run("migrated object is read from destination", func(t *testing.T) {
 		r := require.New(t)
 		object := "migrated"
-		setMigrated(t, storageSvc, object)
+		setCopyState(queueSvc, object, asynq.TaskStateCompleted)
 
 		destStorage, destBucket, ok := rt.destinationReadRoute(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
 		r.True(ok)
@@ -120,41 +110,22 @@ func Test_router_destinationReadRoute(t *testing.T) {
 		r.Equal(skipNotCopied, reason)
 	})
 
-	t.Run("a deleted object is dropped and its deletion noted", func(t *testing.T) {
+	t.Run("object waiting to be copied is read from source", func(t *testing.T) {
 		r := require.New(t)
-		object := "deleted"
-		setMigrated(t, storageSvc, object)
-
-		ctx := xctx.SetBucket(xctx.SetUser(t.Context(), testUser), testBucket)
-		rt.objectDeleted(ctx, testSource, object)
+		object := "pending"
+		setCopyState(queueSvc, object, asynq.TaskStatePending)
 
 		_, _, reason := rt.destinationReadDecision(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
-		r.Equal(skipNotCopied, reason)
-
-		id := entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket)
-		pending, err := storageSvc.IsPendingDeleteObj(ctx, id, object)
-		r.NoError(err)
-		r.True(pending, "the destination holds it until the deletion is replicated")
+		r.Equal(skipCopyStatePrefix+"pending", reason)
 	})
 
-	t.Run("with the initial sync done everything is read from the destination", func(t *testing.T) {
+	t.Run("object whose copy failed is read from source", func(t *testing.T) {
 		r := require.New(t)
-		object := "never-recorded"
-		liveSync(t, ctx, c, policySvc, replID)
+		object := "archived"
+		setCopyState(queueSvc, object, asynq.TaskStateArchived)
 
 		_, _, reason := rt.destinationReadDecision(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
-		r.Empty(reason, "no record needed once everything is copied")
-	})
-
-	t.Run("with the initial sync done a pending delete is read from source", func(t *testing.T) {
-		r := require.New(t)
-		object := "deleted-in-live-sync"
-		r.NoError(storageSvc.ObjectDeleted(ctx, replID, object))
-		t.Cleanup(func() { r.NoError(storageSvc.DelPendingDeleteObj(ctx, replID, object)) })
-		liveSync(t, ctx, c, policySvc, replID)
-
-		_, _, reason := rt.destinationReadDecision(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
-		r.Equal(skipPendingDelete, reason)
+		r.Equal(skipCopyStatePrefix+"archived", reason)
 	})
 
 	t.Run("listings are read from source", func(t *testing.T) {
@@ -191,7 +162,7 @@ func Test_router_destinationReadRoute(t *testing.T) {
 	t.Run("object written after the copy is read from source", func(t *testing.T) {
 		r := require.New(t)
 		object := "overwritten"
-		setMigrated(t, storageSvc, object)
+		setCopyState(queueSvc, object, asynq.TaskStateCompleted)
 		obj := dom.Object{Bucket: testBucket, Name: object}
 		version, err := versionSvc.IncrementObj(ctx, obj, meta.ToDest(testSource, ""))
 		r.NoError(err)
@@ -208,8 +179,8 @@ func Test_router_destinationReadRoute(t *testing.T) {
 	t.Run("disabled option reads from source", func(t *testing.T) {
 		r := require.New(t)
 		object := "migrated"
-		r.NoError(settings.ReadFromDestination.Set(false))
-		defer func() { r.NoError(settings.ReadFromDestination.Set(true)) }()
+		rt.readFromDestination = false
+		defer func() { rt.readFromDestination = true }()
 
 		_, _, ok := rt.destinationReadRoute(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
 		r.False(ok)
@@ -254,13 +225,12 @@ func Test_router_destinationReadRoute(t *testing.T) {
 	t.Run("bucket with several destinations is read from source", func(t *testing.T) {
 		r := require.New(t)
 		object := "migrated"
-		_, err := policySvc.AddBucketReplicationPolicy(ctx, entity.NewReplicationStatusID(testUser, testSource, testBucket, "dst2", testBucket), nil)
+		_, err := policySvc.AddBucketReplicationPolicy(ctx, entity.NewReplicationStatusID(testUser, testSource, testBucket, "dst2", testBucket))
 		r.NoError(err)
 
 		_, _, reason := rt.destinationReadDecision(readReq(s3.GetObject, object, "/"+testBucket+"/"+object), testSource, testUser, testBucket, false)
 		r.Equal(skipManyDestinations, reason)
 	})
-
 }
 
 func Test_rewriteBucket(t *testing.T) {
@@ -354,13 +324,13 @@ func Test_router_adjustObjReadRoute_reportsSwitchInProgress(t *testing.T) {
 	policySvc := policy.NewService(c, queueSvc, nil)
 	replID := entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket)
 	r.NoError(policySvc.AddBucketRoutingPolicy(ctx, entity.NewBucketRoutingPolicyID(testUser, testBucket), testSource, true))
-	_, err := policySvc.AddBucketReplicationPolicy(ctx, replID, nil)
+	_, err := policySvc.AddBucketReplicationPolicy(ctx, replID)
 	r.NoError(err)
 	queueSvc.InitReplicationInProgress(replID)
-	r.NoError(policySvc.ListingDone(ctx, replID))
+	r.NoError(policySvc.ObjListStarted(ctx, replID))
 	queueSvc.InitReplicationDone(replID)
 
-	rt := &router{policySvc: policySvc, versionSvc: meta.NewVersionService(c)}
+	rt := &router{policySvc: policySvc, versionSvc: meta.NewVersionService(c), queueSvc: queueSvc, readFromDestination: true}
 	req := readReq(s3.GetObject, "migrated", "/"+testBucket+"/migrated")
 
 	storage, switchInProgress, err := rt.adjustObjReadRoute(req.Context(), testSource, testUser, testBucket)
@@ -525,21 +495,12 @@ func TestWithAnswerTimeout(t *testing.T) {
 
 // The wait runs out and the destination answers all the same: the fake storage
 // ignores the context, which makes that race repeatable.
-
-// answerTimeout sets the wait for the test and puts it back afterwards.
-func answerTimeout(t *testing.T, d time.Duration) {
-	t.Helper()
-	prev := settings.DestinationAnswerTimeout.Get()
-	require.NoError(t, settings.DestinationAnswerTimeout.Set(d.Milliseconds()))
-	t.Cleanup(func() { require.NoError(t, settings.DestinationAnswerTimeout.Set(prev)) })
-}
-
 func TestReadDestinationGivenUpOn(t *testing.T) {
 	r := require.New(t)
-	answerTimeout(t, 20*time.Millisecond)
 
 	answered := make(chan struct{})
 	rt := &router{
+		destinationAnswerTimeout: 20 * time.Millisecond,
 		clients: fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
 			time.Sleep(100 * time.Millisecond)
 			close(answered)
@@ -573,15 +534,12 @@ func TestCommonReadFallsBackOnABodilessAnswer(t *testing.T) {
 	policySvc := policy.NewService(c, nil, nil)
 	r.NoError(policySvc.AddBucketRoutingPolicy(ctx,
 		entity.NewBucketRoutingPolicyID(testUser, testBucket), testSource, false))
-	replID := entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket)
-	_, err := policySvc.AddBucketReplicationPolicy(ctx, replID, nil)
+	_, err := policySvc.AddBucketReplicationPolicy(ctx,
+		entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket))
 	r.NoError(err)
-	r.NoError(policySvc.ListingDone(ctx, replID))
 
-	storageSvc := storage.New(c)
-	setMigrated(t, storageSvc, "obj") // so the destination is asked at all
-	r.NoError(settings.ReadFromDestination.Set(true))
-	t.Cleanup(func() { r.NoError(settings.ReadFromDestination.Set(false)) })
+	queueSvc := &tasks.QueueServiceMock{}
+	setCopyState(queueSvc, "obj", asynq.TaskStateCompleted) // so the destination is asked at all
 
 	var asked int
 	rt := &router{
@@ -590,9 +548,10 @@ func TestCommonReadFallsBackOnABodilessAnswer(t *testing.T) {
 			// An api error, so the caller discards it - and no body to discard.
 			return &http.Response{StatusCode: http.StatusNotFound, Header: http.Header{}}, true, nil
 		}}},
-		policySvc:  policySvc,
-		versionSvc: meta.NewVersionService(c),
-		storageSvc: storageSvc,
+		policySvc:           policySvc,
+		versionSvc:          meta.NewVersionService(c),
+		queueSvc:            queueSvc,
+		readFromDestination: true,
 	}
 
 	r.NotPanics(func() {
