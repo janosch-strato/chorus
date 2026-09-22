@@ -585,6 +585,10 @@ func Test_DeleteObjIfUnchanged(t *testing.T) {
 		_, err := s.IncrementObj(ctx, obj, src)
 		require.NoError(t, err)
 		require.NoError(t, s.UpdateIfGreater(ctx, obj, dst, 1))
+		_, err = s.IncrementACL(ctx, obj, src)
+		require.NoError(t, err)
+		_, err = s.IncrementTags(ctx, obj, src)
+		require.NoError(t, err)
 		return s, ctx
 	}
 
@@ -601,6 +605,35 @@ func Test_DeleteObjIfUnchanged(t *testing.T) {
 		left, err := s.GetObj(ctx, obj)
 		r.NoError(err)
 		r.Empty(left)
+
+		acl, err := s.GetACL(ctx, obj)
+		r.NoError(err)
+		r.Empty(acl, "the object's acl versions outlived it")
+		tags, err := s.GetTags(ctx, obj)
+		r.NoError(err)
+		r.Empty(tags, "the object's tagging versions outlived it")
+	})
+
+	// They are the object's, so a delete that does not happen leaves them.
+	t.Run("Keeps the acl and tagging of an object it leaves", func(t *testing.T) {
+		r := require.New(t)
+		s, ctx := seeded(t)
+
+		read, err := s.GetObj(ctx, obj)
+		r.NoError(err)
+		_, err = s.IncrementObj(ctx, obj, src)
+		r.NoError(err)
+
+		deleted, err := s.DeleteObjIfUnchanged(ctx, obj, read)
+		r.NoError(err)
+		r.False(deleted)
+
+		acl, err := s.GetACL(ctx, obj)
+		r.NoError(err)
+		r.EqualValues(1, acl[src])
+		tags, err := s.GetTags(ctx, obj)
+		r.NoError(err)
+		r.EqualValues(1, tags[src])
 	})
 
 	t.Run("Keeps a version written since the read", func(t *testing.T) {
