@@ -19,6 +19,7 @@ package metrics
 import (
 	"github.com/hibiken/asynq"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 // QueueInspector is the slice of *asynq.Inspector the queue collector
@@ -29,6 +30,15 @@ type QueueInspector interface {
 	Queues() ([]string, error)
 	GetQueueInfo(qname string) (*asynq.QueueInfo, error)
 }
+
+// queueCollectErrors counts the scrapes that could not read the queues. A
+// scrape that fails writes no queue_tasks at all, which is exactly what a
+// queue with nothing in it looks like, so without this the two cannot be told
+// apart.
+var queueCollectErrors = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "queue_collect_errors_total",
+	Help: "Failed attempts to read the state of the queues from redis.",
+})
 
 // queueCollector reports asynq queue depth at scrape time. Pulling the
 // numbers on demand (rather than polling in the background) keeps the
@@ -78,11 +88,13 @@ func (c *queueCollector) Describe(ch chan<- *prometheus.Desc) {
 func (c *queueCollector) Collect(ch chan<- prometheus.Metric) {
 	queues, err := c.insp.Queues()
 	if err != nil {
+		queueCollectErrors.Inc()
 		return
 	}
 	for _, q := range queues {
 		info, err := c.insp.GetQueueInfo(q)
 		if err != nil {
+			queueCollectErrors.Inc()
 			continue
 		}
 		states := []struct {
