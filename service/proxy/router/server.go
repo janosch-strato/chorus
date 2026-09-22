@@ -69,11 +69,12 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 			if status != 0 {
 				metrics.ProxyStorageStatus(storage, status)
 			}
+			replTasks := replicate(ctx, replSvc, taskList, logger)
 			event := logger.Info().Err(err).
 				Str(log.Storage, storage).
 				Dur("route_duration", routeDuration).
 				Int("status", status).
-				Int("repl_tasks", replicate(ctx, replSvc, taskList, logger))
+				Int("repl_tasks", replTasks)
 			// The client is still there and has to be told.
 			if r.Context().Err() != nil {
 				timingFields(event, timing).Msg("proxy: client disconnected")
