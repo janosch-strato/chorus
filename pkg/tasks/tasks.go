@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -416,6 +417,7 @@ func NewReplicationTask[T ReplicationTask](_ context.Context, replicationID enti
 	// by setting a default timeout of 30 minutes if no deadline and  a timeout of 0 is configured.
 	// Since golangs time.Duration has no value for infinity, we just set  a timeout of 100 years here,
 	// which is most likely long enough for most tasks.
+	optionList = slices.Grow(optionList, 2+len(extra))
 	optionList = append(optionList, asynq.Timeout(100*24*365*time.Hour), asynq.MaxRetry(math.MaxInt32))
 	optionList = append(optionList, extra...)
 	return asynq.NewTask(taskType, bytes, optionList...), nil
@@ -525,6 +527,7 @@ func NewTask[T ApiTask](ctx context.Context, payload T) (*asynq.Task, error) {
 		return nil, fmt.Errorf("%w: unknown task type %T", dom.ErrInvalidArg, p)
 	}
 
+	optionList = slices.Grow(optionList, 1)
 	optionList = append(optionList, asynq.MaxRetry(math.MaxInt32))
 	return asynq.NewTask(taskType, bytes, optionList...), nil
 }
