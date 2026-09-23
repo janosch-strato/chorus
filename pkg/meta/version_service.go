@@ -107,8 +107,6 @@ type VersionService interface {
 	IncrementObj(ctx context.Context, obj dom.Object, dest Destination) (int64, error)
 	// UpdateIfGreater updates object content version in given storage if it is greater than previous value
 	UpdateIfGreater(ctx context.Context, obj dom.Object, dest Destination, version int64) error
-	// DeleteObjAll deletes all obj meta for all storages
-	DeleteObjAll(ctx context.Context, obj dom.Object) error
 	// Deletes all obj meta while it still holds what the caller read, and
 	// reports whether it did. Anything written since belongs to that write.
 	DeleteObjIfUnchanged(ctx context.Context, obj dom.Object, expected map[Destination]int64) (bool, error)
@@ -245,10 +243,6 @@ func (s *versionSvc) DeleteObjIfUnchanged(ctx context.Context, obj dom.Object, e
 		return false, err
 	}
 	return deleted == 1, nil
-}
-
-func (s *versionSvc) DeleteObjAll(ctx context.Context, obj dom.Object) error {
-	return s.client.Del(ctx, obj.Key(), obj.ACLKey(), obj.TagKey()).Err()
 }
 
 func (s *versionSvc) setIfGreater(ctx context.Context, key, field string, setTo int) error {
