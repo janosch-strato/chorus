@@ -23,13 +23,14 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/clyso/chorus/pkg/listen"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/rs/cors"
 	"github.com/tmc/grpc-websocket-proxy/wsproxy"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"github.com/clyso/chorus/pkg/listen"
 )
 
 type RegisterHandlersFunc func(ctx context.Context, mux *runtime.ServeMux, endpoint string, opts []grpc.DialOption) error

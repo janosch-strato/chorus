@@ -620,7 +620,6 @@ func (r *policySvc) AddBucketReplicationPolicy(ctx context.Context, id entity.Re
 	return entity.NewBucketReplicationPolicyDestination(id.ToStorage, id.ToBucket), nil
 }
 
-
 func (r *policySvc) PauseReplication(ctx context.Context, id entity.ReplicationStatusID) error {
 	if err := validate.ReplicationStatusID(id); err != nil {
 		return fmt.Errorf("pause replication: unable to validate replication status id: %w", err)
