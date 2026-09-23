@@ -66,7 +66,6 @@ func toDone(in entity.QueueStats) int64 {
 	return int64(in.Done - in.Rescheduled - in.Failed)
 }
 
-
 func pbToReplicationID(in *pb.ReplicationRequest) entity.ReplicationStatusID {
 	return entity.ReplicationStatusID{
 		User:        in.User,
