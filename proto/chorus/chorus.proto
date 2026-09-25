@@ -31,8 +31,6 @@ service Chorus {
   rpc PauseReplication(ReplicationRequest) returns (google.protobuf.Empty);
   // Resumes given replication
   rpc ResumeReplication(ReplicationRequest) returns (google.protobuf.Empty);
-  // Deletes given replication
-  rpc DeleteReplication(ReplicationRequest) returns (google.protobuf.Empty);
   rpc DeleteUserReplication(DeleteUserReplicationRequest) returns (google.protobuf.Empty);
 
   // Switch main<->follower for selected replication without downtime.
