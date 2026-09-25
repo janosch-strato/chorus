@@ -46,10 +46,12 @@ replication destination, and `proxy_head_bucket_cache_total{result}` the
 bucket existence cache.
 
 **Storage requests.** `storage_requests_total{flow,storage,method,status}`
-counts the api calls chorus makes, with `status` one of `ok`, `client_error`,
-`server_error`, `network_error` or `internal_error` — a request that failed is
-counted, not skipped. The last two are worth keeping apart: `network_error` is
-a storage that could not be reached, while `internal_error` is a call that
+counts the api calls chorus makes, with `status` one of `ok`, `redirect`,
+`client_error`, `server_error`, `network_error` or `internal_error` — a
+request that failed is counted, not skipped. `redirect` is a 3xx, which the
+storage answered but chorus does not follow, so it is neither a success nor a
+fault of the storage. The last two are worth keeping apart: `network_error`
+is a storage that could not be reached, while `internal_error` is a call that
 never left this process or was cancelled, and only the first says anything
 about the storage. `storage_request_duration_seconds` carries the same labels
 and times a call that failed as well, so an average can be read per outcome.
