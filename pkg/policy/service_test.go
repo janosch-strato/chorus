@@ -327,7 +327,7 @@ func Test_policySvc_BucketReplicationPolicies(t *testing.T) {
 				exists, err := svc.IsReplicationPolicyExists(ctx, replicationID12)
 				r.NoError(err)
 				r.False(exists)
-				err = svc.ObjListStarted(ctx, replicationID34)
+				err = svc.ListingDone(ctx, replicationID34)
 				r.ErrorIs(err, dom.ErrNotFound)
 			}
 		}
@@ -499,12 +499,12 @@ func Test_policySvc_BucketReplicationPolicies(t *testing.T) {
 
 		pol, err := svc.GetReplicationPolicyInfo(ctx, replicationIDu1s1s2)
 		r.NoError(err)
-		r.False(pol.ListingStarted)
-		err = svc.ObjListStarted(ctx, replicationIDu1s1s2)
+		r.False(pol.ListingDone)
+		err = svc.ListingDone(ctx, replicationIDu1s1s2)
 		r.NoError(err)
 		pol, err = svc.GetReplicationPolicyInfo(ctx, replicationIDu1s1s2)
 		r.NoError(err)
-		r.True(pol.ListingStarted)
+		r.True(pol.ListingDone)
 
 		err = svc.DeleteReplication(ctx, replicationIDu1s1s2)
 		r.NoError(err)

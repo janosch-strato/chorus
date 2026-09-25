@@ -75,7 +75,7 @@ type ReplicationStatus struct {
 
 	ArchivedAt *time.Time `redis:"archived_at,omitempty"`
 
-	ListingStarted bool `redis:"listing_started"`
+	ListingDone bool `redis:"listing_done"`
 	// LiveSync is set by the copy that finishes the initial sync: everything
 	// the listing found is on the destination from then on, and only what
 	// happens since is replicated. Unlike InitDone() it is a fact of the
@@ -97,7 +97,7 @@ type ReplicationStatusExtended struct {
 }
 
 func (r *ReplicationStatusExtended) InitDone() bool {
-	return r.ListingStarted && r.InitMigration.Pending == 0
+	return r.ListingDone && r.InitMigration.Pending == 0
 }
 
 type QueueStats struct {

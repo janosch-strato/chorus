@@ -359,8 +359,8 @@ func (r *policySvc) UpdateDowntimeSwitchStatus(ctx context.Context, replID entit
 			replBackID.FromStorage, replBackID.ToStorage = replID.ToStorage, replID.FromStorage
 			txReplicationStatusStore := r.replicationStatusStore.WithExecutor(exec)
 			txReplicationStatusStore.SetOp(ctx, replBackID, entity.ReplicationStatus{
-				ListingStarted: true,
-				CreatedAt:      now,
+				ListingDone: true,
+				CreatedAt:   now,
 			})
 		}
 	}

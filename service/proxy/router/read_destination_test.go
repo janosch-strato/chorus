@@ -81,7 +81,7 @@ func Test_router_destinationReadRoute(t *testing.T) {
 	_, err := policySvc.AddBucketReplicationPolicy(ctx, replID, nil)
 	require.NoError(t, err)
 	// the initial sync is running: the migrated records decide
-	require.NoError(t, policySvc.ObjListStarted(ctx, replID))
+	require.NoError(t, policySvc.ListingDone(ctx, replID))
 
 	versionSvc := meta.NewVersionService(c)
 	storageSvc := storage.New(c)
@@ -340,7 +340,7 @@ func Test_router_adjustObjReadRoute_reportsSwitchInProgress(t *testing.T) {
 	_, err := policySvc.AddBucketReplicationPolicy(ctx, replID, nil)
 	r.NoError(err)
 	queueSvc.InitReplicationInProgress(replID)
-	r.NoError(policySvc.ObjListStarted(ctx, replID))
+	r.NoError(policySvc.ListingDone(ctx, replID))
 	queueSvc.InitReplicationDone(replID)
 
 	rt := &router{policySvc: policySvc, versionSvc: meta.NewVersionService(c)}
