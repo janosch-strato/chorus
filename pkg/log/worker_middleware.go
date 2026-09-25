@@ -39,10 +39,14 @@ func WorkerMiddleware(cfg *Config, app, appID string) asynq.MiddlewareFunc {
 			builder := l.With()
 			builder = builder.Str("task_type", t.Type()).RawJSON("task_payload", t.Payload())
 			f := xctx.Migration
+			taskUser := ""
 			if queue, ok := asynq.GetQueueName(ctx); ok {
 				builder = builder.Str("task_queue", queue)
 				if strings.HasPrefix(queue, string(tasks.QueueEventsPrefix)) {
 					f = xctx.Event
+				}
+				if id, ok := tasks.ReplicationFromQueue(queue); ok {
+					taskUser = id.User
 				}
 			}
 			builder = builder.Str("flow", string(f))
@@ -56,13 +60,17 @@ func WorkerMiddleware(cfg *Config, app, appID string) asynq.MiddlewareFunc {
 				builder = builder.Int("task_retry_count", retryCnt)
 			}
 
-			u, err := jsonparser.GetString(t.Payload(), "User")
-			if err != nil && !errors.Is(err, jsonparser.KeyPathNotFoundError) {
-				l.Err(err).Msg("unable to get user meta from task payload")
+			// only a task outside of a replication still names its user
+			if taskUser == "" {
+				u, err := jsonparser.GetString(t.Payload(), "User")
+				if err != nil && !errors.Is(err, jsonparser.KeyPathNotFoundError) {
+					l.Err(err).Msg("unable to get user meta from task payload")
+				}
+				taskUser = u
 			}
-			if u != "" {
-				builder = builder.Str(user, u)
-				ctx = xctx.SetUser(ctx, u)
+			if taskUser != "" {
+				builder = builder.Str(user, taskUser)
+				ctx = xctx.SetUser(ctx, taskUser)
 			}
 
 			newLogger := builder.Logger()

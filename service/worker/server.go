@@ -45,6 +45,7 @@ import (
 	"github.com/clyso/chorus/pkg/rclone"
 	"github.com/clyso/chorus/pkg/rpc"
 	"github.com/clyso/chorus/pkg/s3client"
+	"github.com/clyso/chorus/pkg/settings"
 	"github.com/clyso/chorus/pkg/storage"
 	"github.com/clyso/chorus/pkg/store"
 	"github.com/clyso/chorus/pkg/tasks"
@@ -139,8 +140,12 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	taskClient := asynq.NewClient(queueRedis)
 	defer taskClient.Close()
 	inspector := asynq.NewInspector(queueRedis)
+	// a plain client on the queue db, for the cheap queue reads the inspector
+	// has no api for
+	queueClient := util.NewRedis(conf.Redis, conf.Redis.QueueDB)
+	defer queueClient.Close()
 	defer inspector.Close()
-	queueSvc := tasks.NewQueueService(inspector)
+	queueSvc := tasks.NewQueueService(inspector, queueClient)
 	policySvc := policy.NewService(confRedis, queueSvc, conf.Storage)
 
 	err = policy_helper.CreateMainFollowerPolicies(ctx, &logger, *conf.Storage, s3Clients, policySvc, taskClient)
@@ -162,10 +167,13 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	versionedMigrationSvc := handler.NewVersionedMigrationSvc(policySvc, copySvc, objectVersionInfoStore, objectLocker, conf.Worker.PauseRetryInterval)
 	versionedMigrationCtrl := handler.NewVersionedMigrationCtrl(versionedMigrationSvc, taskClient)
 
-	if err = tasks.SetListingSpeed(conf.Worker.ListingSpeed); err != nil {
+	if err = settings.ListingSpeed.SetString(conf.Worker.ListingSpeed); err != nil {
 		return err
 	}
-	logger.Info().Str("listing_speed", tasks.GetListingSpeed()).Msg("bucket listing speed")
+	if err = settings.ReadFromDestination.Set(conf.Worker.ReadFromDestination); err != nil {
+		return err
+	}
+	logger.Info().Str("listing_speed", settings.ListingSpeed.GetString()).Msg("bucket listing speed")
 
 	workerSvc := handler.New(conf.Worker, s3Clients, versionSvc, policySvc, storageSvc, rc, taskClient, queueSvc, limiter, objectLocker, bucketLocker, replicationStatusLocker)
 

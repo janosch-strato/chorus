@@ -27,7 +27,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/clyso/chorus/pkg/dom"
-	"github.com/clyso/chorus/pkg/tasks"
+	"github.com/clyso/chorus/pkg/entity"
 )
 
 const (
@@ -35,12 +35,12 @@ const (
 )
 
 var (
-	luaDeleteKeysByPrefix = redis.NewScript(`local keys = redis.call('keys', ARGV[1])
-if #keys >0 then
-	return redis.call('DEL', unpack(keys))
-else
-	return 0
-end`)
+	// KEYS[1] the pending deletes of a replication, KEYS[2] what it has copied,
+	// ARGV[1] the object. One slot by the hash tag of both keys, see
+	// replicationSlot.
+	luaObjectDeleted = redis.NewScript(`redis.call("SADD", KEYS[1], ARGV[1])
+redis.call("SREM", KEYS[2], ARGV[1])
+return 0`)
 
 	luaAddToConsistencySet = redis.NewScript(`redis.call("SADD", KEYS[1], ARGV[1])
 local count = redis.call("SCARD", KEYS[1])
@@ -76,10 +76,29 @@ type ConsistencyCheckResultPage struct {
 }
 
 type Service interface {
-	GetLastListedObj(ctx context.Context, task tasks.MigrateBucketListObjectsPayload) (string, error)
-	SetLastListedObj(ctx context.Context, task tasks.MigrateBucketListObjectsPayload, val string) error
-	DelLastListedObj(ctx context.Context, task tasks.MigrateBucketListObjectsPayload) error
-	CleanLastListedObj(ctx context.Context, fromStor, toStor, fromBucket string, toBucket string) error
+	// The listing cursor of a replication, one per replication.
+	GetLastListedObj(ctx context.Context, fromStor, toStor, fromBucket, toBucket string) (string, error)
+	SetLastListedObj(ctx context.Context, fromStor, toStor, fromBucket, toBucket, object string) error
+	DelLastListedObj(ctx context.Context, fromStor, toStor, fromBucket, toBucket string) error
+
+	// Objects deleted through the proxy whose deletion the destination has not
+	// replicated yet. They exist for the readFromDestination mode of the
+	// proxy, which reads an object from the destination storage while the
+	// migration runs and must not do so for one that is already deleted.
+	// ObjectDeleted records a deletion through the proxy: the object stops
+	// counting as copied and its deletion is noted as being on its way to the
+	// destination, in one step, so that a crash between the two cannot leave
+	// an object that is gone from the source being read from the destination.
+	ObjectDeleted(ctx context.Context, id entity.ReplicationStatusID, object string) error
+	IsPendingDeleteObj(ctx context.Context, id entity.ReplicationStatusID, object string) (bool, error)
+	DelPendingDeleteObj(ctx context.Context, id entity.ReplicationStatusID, object string) error
+	DelAllPendingDeleteObjs(ctx context.Context, id entity.ReplicationStatusID) error
+
+	// The objects a migration has copied. They exist for the same mode: the
+	// proxy serves reads of a copied object from the destination storage.
+	SetMigratedObj(ctx context.Context, id entity.ReplicationStatusID, object string) error
+	IsMigratedObj(ctx context.Context, id entity.ReplicationStatusID, object string) (bool, error)
+	DelAllMigratedObjs(ctx context.Context, id entity.ReplicationStatusID) error
 
 	StoreUploadID(ctx context.Context, user, bucket, object, uploadID string, ttl time.Duration) error
 	DeleteUploadID(ctx context.Context, user, bucket, object, uploadID string) error
@@ -123,28 +142,18 @@ type svc struct {
 	client redis.UniversalClient
 }
 
-func (s *svc) CleanLastListedObj(ctx context.Context, fromStor string, toStor string, fromBucket string, toBucket string) error {
-	key := fmt.Sprintf("s:%s:%s:%s:%s", fromStor, toStor, fromBucket, toBucket)
-	if err := s.client.Del(ctx, key).Err(); err != nil {
-		return err
-	}
-	prefix := key + ":*"
-	return luaDeleteKeysByPrefix.Run(ctx, s.client, []string{}, prefix).Err()
+// lastListedObjKey names the listing cursor of a replication. One listing per
+// replication means one cursor.
+func lastListedObjKey(fromStor, toStor, fromBucket, toBucket string) string {
+	return fmt.Sprintf("s:%s:%s:%s:%s", fromStor, toStor, fromBucket, toBucket)
 }
 
-func (s *svc) DelLastListedObj(ctx context.Context, task tasks.MigrateBucketListObjectsPayload) error {
-	key := fmt.Sprintf("s:%s:%s:%s:%s", task.FromStorage, task.ToStorage, task.Bucket, task.ToBucket)
-	if task.Prefix != "" {
-		key += ":" + task.Prefix
-	}
-	return s.client.Del(ctx, key).Err()
+func (s *svc) DelLastListedObj(ctx context.Context, fromStor, toStor, fromBucket, toBucket string) error {
+	return s.client.Del(ctx, lastListedObjKey(fromStor, toStor, fromBucket, toBucket)).Err()
 }
 
-func (s *svc) GetLastListedObj(ctx context.Context, task tasks.MigrateBucketListObjectsPayload) (string, error) {
-	key := fmt.Sprintf("s:%s:%s:%s:%s", task.FromStorage, task.ToStorage, task.Bucket, task.ToBucket)
-	if task.Prefix != "" {
-		key += ":" + task.Prefix
-	}
+func (s *svc) GetLastListedObj(ctx context.Context, fromStor, toStor, fromBucket, toBucket string) (string, error) {
+	key := lastListedObjKey(fromStor, toStor, fromBucket, toBucket)
 	val, err := s.client.Get(ctx, key).Result()
 	if errors.Is(err, redis.Nil) {
 		return "", nil
@@ -152,12 +161,61 @@ func (s *svc) GetLastListedObj(ctx context.Context, task tasks.MigrateBucketList
 	return val, err
 }
 
-func (s *svc) SetLastListedObj(ctx context.Context, task tasks.MigrateBucketListObjectsPayload, val string) error {
-	key := fmt.Sprintf("s:%s:%s:%s:%s", task.FromStorage, task.ToStorage, task.Bucket, task.ToBucket)
-	if task.Prefix != "" {
-		key += ":" + task.Prefix
-	}
-	return s.client.Set(ctx, key, val, lastListedObjTTL).Err()
+func (s *svc) SetLastListedObj(ctx context.Context, fromStor, toStor, fromBucket, toBucket, object string) error {
+	key := lastListedObjKey(fromStor, toStor, fromBucket, toBucket)
+	return s.client.Set(ctx, key, object, lastListedObjTTL).Err()
+}
+
+// replicationSlot names a replication the way redis reads a hash tag: what is
+// between the braces decides the slot of the key, so the two sets below are on
+// one node of a cluster and can be written in one step. Only they carry it,
+// since only they are written together.
+func replicationSlot(id entity.ReplicationStatusID) string {
+	return fmt.Sprintf("{%s:%s:%s:%s:%s}", id.User, id.FromStorage, id.FromBucket, id.ToStorage, id.ToBucket)
+}
+
+// migratedObjsKey names the set of objects a migration has copied, one set per
+// replication. Only readFromDestination reads these records, and a migration
+// that is not in that mode never writes them.
+func migratedObjsKey(id entity.ReplicationStatusID) string {
+	return "s:read-from-destination:" + replicationSlot(id)
+}
+
+// pendingDeleteObjsKey names the set of objects that were deleted through the
+// proxy and are still on the destination, one set per replication. Only the
+// readFromDestination mode writes and reads it. It holds what is in flight,
+// not what has been done, so it stays small.
+func pendingDeleteObjsKey(id entity.ReplicationStatusID) string {
+	return "s:pending-delete:" + replicationSlot(id)
+}
+
+func (s *svc) ObjectDeleted(ctx context.Context, id entity.ReplicationStatusID, object string) error {
+	return luaObjectDeleted.Run(ctx, s.client,
+		[]string{pendingDeleteObjsKey(id), migratedObjsKey(id)}, object).Err()
+}
+
+func (s *svc) IsPendingDeleteObj(ctx context.Context, id entity.ReplicationStatusID, object string) (bool, error) {
+	return s.client.SIsMember(ctx, pendingDeleteObjsKey(id), object).Result()
+}
+
+func (s *svc) DelPendingDeleteObj(ctx context.Context, id entity.ReplicationStatusID, object string) error {
+	return s.client.SRem(ctx, pendingDeleteObjsKey(id), object).Err()
+}
+
+func (s *svc) DelAllPendingDeleteObjs(ctx context.Context, id entity.ReplicationStatusID) error {
+	return s.client.Del(ctx, pendingDeleteObjsKey(id)).Err()
+}
+
+func (s *svc) SetMigratedObj(ctx context.Context, id entity.ReplicationStatusID, object string) error {
+	return s.client.SAdd(ctx, migratedObjsKey(id), object).Err()
+}
+
+func (s *svc) IsMigratedObj(ctx context.Context, id entity.ReplicationStatusID, object string) (bool, error) {
+	return s.client.SIsMember(ctx, migratedObjsKey(id), object).Result()
+}
+
+func (s *svc) DelAllMigratedObjs(ctx context.Context, id entity.ReplicationStatusID) error {
+	return s.client.Del(ctx, migratedObjsKey(id)).Err()
 }
 
 func (s *svc) StoreUploadID(ctx context.Context, user, bucket, object, uploadID string, ttl time.Duration) error {

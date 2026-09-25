@@ -49,6 +49,13 @@ type Config struct {
 	Address s3.ConfAddr       `yaml:"address"`
 	Cors    *cors.Config      `yaml:"cors"`
 
+	// HeadBucketCache is "enabled" (default) or "disabled", see
+	// switches.HeadBucketCache. It is applied at startup and can be changed at
+	// runtime through the maint api, which lasts until the next restart. It is
+	// of any use only together with ReadFromDestination, which is what fills
+	// the cache at all.
+	HeadBucketCache string `yaml:"headBucketCache"`
+
 	// ReadFromDestination serves object reads from the replication destination
 	// for objects the migration has already copied. Meant for migrations away
 	// from a storage that is too slow to read from.

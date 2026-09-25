@@ -23,7 +23,7 @@ func Test_queueService_UnprocessedCount(t *testing.T) {
 		client.Close()
 		inspector.Close()
 	})
-	qs := NewQueueService(inspector)
+	qs := NewQueueService(inspector, c)
 
 	r := require.New(t)
 	queueName := "test-queue-is-empty"
@@ -122,7 +122,7 @@ func Test_queueService_RetriedTasksCountAsPending(t *testing.T) {
 	defer inspector.Close()
 	client := asynq.NewClientFromRedisClient(c)
 	defer client.Close()
-	qs := NewQueueService(inspector)
+	qs := NewQueueService(inspector, c)
 
 	r := require.New(t)
 	queueName := "test-queue-is-empty-with-retry"
@@ -190,7 +190,7 @@ func Test_queueService_PauseResume(t *testing.T) {
 	defer inspector.Close()
 	client := asynq.NewClientFromRedisClient(c)
 	defer client.Close()
-	qs := NewQueueService(inspector)
+	qs := NewQueueService(inspector, c)
 
 	r := require.New(t)
 	queueName := "test-queue-pause-resume"
@@ -248,7 +248,7 @@ func Test_queueService_Stats(t *testing.T) {
 	defer inspector.Close()
 	client := asynq.NewClientFromRedisClient(c)
 	defer client.Close()
-	qs := NewQueueService(inspector)
+	qs := NewQueueService(inspector, c)
 
 	r := require.New(t)
 	queueName := "test-queue-stats"
@@ -322,7 +322,7 @@ func Test_queueService_GetAndDeleteTask(t *testing.T) {
 		client.Close()
 		inspector.Close()
 	})
-	qs := NewQueueService(inspector)
+	qs := NewQueueService(inspector, c)
 
 	const queueName = "test-queue-get-task"
 	const taskID = "test-task-id"
@@ -348,4 +348,45 @@ func Test_queueService_GetAndDeleteTask(t *testing.T) {
 
 	// deleting twice is not an error
 	r.NoError(qs.DeleteTask(ctx, queueName, taskID))
+}
+
+// Test_queueService_QueuedEmpty pins the key layout QueuedEmpty reads: the
+// queue is built with asynq itself, so a change of its storage format shows up
+// here rather than as a migration that never leaves its initial sync.
+func Test_queueService_QueuedEmpty(t *testing.T) {
+	r := require.New(t)
+	ctx := t.Context()
+	c := testutil.SetupRedis(t)
+	inspector := asynq.NewInspectorFromRedisClient(c)
+	client := asynq.NewClientFromRedisClient(c)
+	t.Cleanup(func() {
+		client.Close()
+		inspector.Close()
+	})
+	qs := NewQueueService(inspector, c)
+	queueName := "test-queue-queued-empty"
+
+	empty, err := qs.QueuedEmpty(ctx, queueName)
+	r.NoError(err, "a queue that does not exist holds nothing")
+	r.True(empty)
+
+	_, err = client.EnqueueContext(ctx, asynq.NewTask("test-task", nil), asynq.Queue(queueName))
+	r.NoError(err)
+	empty, err = qs.QueuedEmpty(ctx, queueName)
+	r.NoError(err)
+	r.False(empty, "a pending task is waiting to run")
+
+	_, err = client.EnqueueContext(ctx, asynq.NewTask("test-task-later", nil), asynq.Queue(queueName), asynq.ProcessIn(time.Hour))
+	r.NoError(err)
+	_, err = inspector.ArchiveAllPendingTasks(queueName)
+	r.NoError(err)
+	empty, err = qs.QueuedEmpty(ctx, queueName)
+	r.NoError(err)
+	r.False(empty, "a scheduled task is waiting to run as well")
+
+	_, err = inspector.DeleteAllScheduledTasks(queueName)
+	r.NoError(err)
+	empty, err = qs.QueuedEmpty(ctx, queueName)
+	r.NoError(err)
+	r.True(empty, "an archived task is not waiting for anything")
 }

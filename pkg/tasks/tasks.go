@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/buger/jsonparser"
@@ -76,34 +77,45 @@ var Priority = map[string]int{
 	"*":                                          1, // fallback for legacy queues
 }
 
+// A replication queue is named after the replication it belongs to, so that
+// a task in it has to name nothing but its object.
+const replicationQueueParts = 5
+
 func replicationQueueName(queuePrefix Queue, id entity.ReplicationStatusID) string {
 	switch queuePrefix {
 	case QueueMigrateCopyObjectPrefix,
 		QueueMigrateListObjectsPrefix,
 		QueueEventsPrefix:
-		return fmt.Sprintf("%s:%s:%s:%s:%s", queuePrefix, id.FromStorage, id.FromBucket, id.ToStorage, id.ToBucket)
+		return fmt.Sprintf("%s:%s:%s:%s:%s:%s", queuePrefix,
+			id.User, id.FromStorage, id.FromBucket, id.ToStorage, id.ToBucket)
 	default:
 		panic(fmt.Sprintf("%s is not a replication queue prefix", queuePrefix))
 	}
 }
 
-// MigrateObjCopyRetention is the period a finished object copy task is kept in
-// its queue. Retained tasks are the record of which objects the initial
-// migration has copied, which the proxy readFromDestination option consults to
-// decide whether a read may be served by the destination storage. The record
-// has to outlive the migration, so the same "long enough for everything" span
-// as the task timeout below is used. The retained tasks are freed when the
-// replication and its queues are deleted.
-const MigrateObjCopyRetention = 100 * 365 * 24 * time.Hour
+// ReplicationFromQueue returns the replication a queue belongs to. It reports
+// false for a queue that belongs to none, like the queue of the api.
+func ReplicationFromQueue(queue string) (entity.ReplicationStatusID, bool) {
+	prefix, rest, found := strings.Cut(queue, ":")
+	if !found {
+		return entity.ReplicationStatusID{}, false
+	}
+	switch Queue(prefix) {
+	case QueueMigrateCopyObjectPrefix, QueueMigrateListObjectsPrefix, QueueEventsPrefix:
+	default:
+		return entity.ReplicationStatusID{}, false
+	}
+	parts := strings.Split(rest, ":")
+	if len(parts) != replicationQueueParts {
+		return entity.ReplicationStatusID{}, false
+	}
+	return entity.NewReplicationStatusID(parts[0], parts[1], parts[2], parts[3], parts[4]), true
+}
 
 // MigrateBucketListObjectsTaskID returns the task id of the listing task for a
 // bucket and prefix.
-func MigrateBucketListObjectsTaskID(fromStorage, toStorage, bucket, toBucket, prefix string) string {
-	id := fmt.Sprintf("mgr:lo:%s:%s:%s:%s", fromStorage, toStorage, bucket, toBucket)
-	if prefix != "" {
-		id += ":" + prefix
-	}
-	return id
+func MigrateBucketListObjectsTaskID(fromStorage, toStorage, bucket, toBucket string) string {
+	return fmt.Sprintf("mgr:lo:%s:%s:%s:%s", fromStorage, toStorage, bucket, toBucket)
 }
 
 // MigrateObjCopyQueue returns the name of the queue holding the object copy
@@ -112,15 +124,34 @@ func MigrateObjCopyQueue(id entity.ReplicationStatusID) string {
 	return replicationQueueName(QueueMigrateCopyObjectPrefix, id)
 }
 
+// The copy queue holds two kinds of task, both contain the object name
+// (unversioned) or prefix (versioned) and these constants keep their ids apart.
+const (
+	copyObjectIDPrefix    = "o:"
+	copyVersionedIDPrefix = "v:"
+)
+
 // MigrateObjCopyTaskID returns the task id of the object copy task for the
 // given object. The id is deterministic so that the task can be looked up
-// without knowing anything but the object itself.
-func MigrateObjCopyTaskID(fromStorage, toStorage, bucket, toBucket, object, versionID string) string {
-	id := fmt.Sprintf("mgr:co:%s:%s:%s:%s:%s", fromStorage, toStorage, bucket, toBucket, object)
-	if versionID != "" {
-		id += ":" + versionID
+// without knowing anything but the object itself. The version comes first
+// because an object name may contain the delimiter, so only the tail of the
+// id can hold it.
+func MigrateObjCopyTaskID(object, versionID string) string {
+	return copyObjectIDPrefix + versionID + ":" + object
+}
+
+// ObjectFromCopyTaskID returns the object and the version a copy task id
+// names.
+func ObjectFromCopyTaskID(id string) (object, versionID string, ok bool) {
+	rest, found := strings.CutPrefix(id, copyObjectIDPrefix)
+	if !found {
+		return "", "", false
 	}
-	return id
+	versionID, object, found = strings.Cut(rest, ":")
+	if !found {
+		return "", "", false
+	}
+	return object, versionID, true
 }
 
 func InitMigrationQueues(id entity.ReplicationStatusID) []string {
@@ -248,22 +279,21 @@ type MigrateVersionedObjectPayload struct {
 type MigrateBucketListObjectsPayload struct {
 	Sync
 	Bucket    string
-	Prefix    string
 	Versioned bool
+	// Parked counts how often this listing has stopped for a full copy queue.
+	// It is what makes the id of a continuation differ from the id of the task
+	// that queues it, see the worker handler.
+	Parked int
 }
 
+// MigrateObjCopyPayload names the object to copy. The replication is in the
+// name of the queue and the object in the task id, both of which redis stores
+// anyway, so the payload holds only what neither of them says.
 type MigrateObjCopyPayload struct {
-	Sync
-	Bucket string
-	Obj    ObjPayload
-}
-
-type ObjPayload struct {
-	Name        string
-	VersionID   string
-	ETag        string
-	Size        int64
-	ContentType string
+	// Name and VersionID make the task id and are not stored a second time.
+	Name      string `json:"-"`
+	VersionID string `json:"-"`
+	Size      int64
 }
 
 type MigrateLocation struct {
@@ -317,16 +347,10 @@ type ReplicationTask interface {
 // NewReplicationTask builds the task for a replication payload. Extra options
 // are applied last, so a caller can override the defaults, for example to
 // reschedule a listing under a different task id.
-func NewReplicationTask[T ReplicationTask](ctx context.Context, replicationID entity.ReplicationStatusID, payload T, extra ...asynq.Option) (*asynq.Task, error) {
+func NewReplicationTask[T ReplicationTask](_ context.Context, replicationID entity.ReplicationStatusID, payload T, extra ...asynq.Option) (*asynq.Task, error) {
 	bytes, err := json.Marshal(&payload)
 	if err != nil {
 		return nil, err
-	}
-	if xctx.GetUser(ctx) != "" {
-		bytes, err = jsonparser.Set(bytes, []byte(`"`+xctx.GetUser(ctx)+`"`), "User")
-		if err != nil {
-			return nil, fmt.Errorf("%w: unable to add User to payload", err)
-		}
 	}
 	taskType := ""
 	var optionList []asynq.Option
@@ -361,17 +385,17 @@ func NewReplicationTask[T ReplicationTask](ctx context.Context, replicationID en
 		optionList = []asynq.Option{asynq.Queue(queue)}
 		taskType = TypeObjectSyncACL
 	case MigrateBucketListObjectsPayload:
-		id := MigrateBucketListObjectsTaskID(p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket, p.Prefix)
+		id := MigrateBucketListObjectsTaskID(p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket)
 		queue := replicationQueueName(QueueMigrateListObjectsPrefix, replicationID)
 		optionList = []asynq.Option{asynq.Queue(queue), asynq.TaskID(id)}
 		taskType = TypeMigrateBucketListObjects
 	case MigrateObjCopyPayload:
-		id := MigrateObjCopyTaskID(p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket, p.Obj.Name, p.Obj.VersionID)
+		id := MigrateObjCopyTaskID(p.Name, p.VersionID)
 		queue := MigrateObjCopyQueue(replicationID)
-		optionList = []asynq.Option{asynq.Queue(queue), asynq.TaskID(id), asynq.Retention(MigrateObjCopyRetention)}
+		optionList = []asynq.Option{asynq.Queue(queue), asynq.TaskID(id)}
 		taskType = TypeMigrateObjCopy
 	case MigrateVersionedObjectPayload:
-		id := fmt.Sprintf("mgr:cov:%s:%s:%s:%s", p.FromStorage, p.ToStorage, p.Bucket, p.Prefix)
+		id := copyVersionedIDPrefix + p.Prefix
 		queue := replicationQueueName(QueueMigrateCopyObjectPrefix, replicationID)
 		optionList = []asynq.Option{asynq.Queue(queue), asynq.TaskID(id)}
 		taskType = TypeMigrateVersionedObject
@@ -403,18 +427,18 @@ type TaskObjectInfo struct {
 	ToStorage   string
 }
 
-// ParseTaskObjectInfo decodes a task payload into object/bucket identifiers.
-// Returns nil for unrecognised task types.
-func ParseTaskObjectInfo(taskType string, payload []byte) (*TaskObjectInfo, error) {
+// ParseTaskObjectInfo decodes the object and bucket identifiers of a task
+// from its payload, its queue and its id. Returns nil for unrecognised task
+// types.
+func ParseTaskObjectInfo(t *asynq.TaskInfo) (*TaskObjectInfo, error) {
 	var p struct {
 		Sync
 		Bucket string     `json:"Bucket"`
 		Object dom.Object `json:"Object"`
-		Obj    ObjPayload `json:"Obj"`
 		Prefix string     `json:"Prefix"`
 	}
-	if err := json.Unmarshal(payload, &p); err != nil {
-		return nil, fmt.Errorf("unmarshal %s payload: %w", taskType, err)
+	if err := json.Unmarshal(t.Payload, &p); err != nil {
+		return nil, fmt.Errorf("unmarshal %s payload: %w", t.Type, err)
 	}
 
 	info := &TaskObjectInfo{
@@ -423,10 +447,17 @@ func ParseTaskObjectInfo(taskType string, payload []byte) (*TaskObjectInfo, erro
 		ToStorage:   p.ToStorage,
 	}
 
-	switch taskType {
+	switch t.Type {
 	case TypeMigrateObjCopy:
-		info.Object = p.Obj.Name
-		info.Bucket = p.Bucket
+		// this one names neither its replication nor its object, the queue
+		// and the task id do
+		id, ok := ReplicationFromQueue(t.Queue)
+		if !ok {
+			return nil, fmt.Errorf("%s task outside of a replication queue %q", t.Type, t.Queue)
+		}
+		info.Bucket, info.ToBucket = id.FromBucket, id.ToBucket
+		info.FromStorage, info.ToStorage = id.FromStorage, id.ToStorage
+		info.Object, _, _ = ObjectFromCopyTaskID(t.ID)
 	case TypeMigrateVersionedObject:
 		info.Object = p.Prefix
 		info.Bucket = p.Bucket

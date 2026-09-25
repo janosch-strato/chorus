@@ -80,14 +80,18 @@ type Service interface {
 	GetReplicationPolicyInfoExtended(ctx context.Context, id entity.ReplicationStatusID) (entity.ReplicationStatusExtended, error)
 	ListReplicationPolicyInfo(ctx context.Context) (map[entity.ReplicationStatusID]entity.ReplicationStatusExtended, error)
 	IsReplicationPolicyExists(ctx context.Context, id entity.ReplicationStatusID) (bool, error)
-	ObjListStarted(ctx context.Context, id entity.ReplicationStatusID) error
+	ListingDone(ctx context.Context, id entity.ReplicationStatusID) error
+	LiveSyncStarted(ctx context.Context, id entity.ReplicationStatusID) error
 
 	PauseReplication(ctx context.Context, id entity.ReplicationStatusID) error
 	ResumeReplication(ctx context.Context, id entity.ReplicationStatusID) error
-	DeleteReplication(ctx context.Context, id entity.ReplicationStatusID) error
+	// DropReplicationRecords removes the stored replication policy and status
+	// records but leaves the replication's task queues alone. See the
+	// implementation for why.
+	DropReplicationRecords(ctx context.Context, id entity.ReplicationStatusID) error
 	// Archive replication. Will stop generating new events for this replication.
 	// Existing events will be processed and replication status metadata will be kept.
-	DeleteBucketReplicationsByUser(ctx context.Context, user, from string, to string) ([]string, error)
+	DeleteBucketReplicationsByUser(ctx context.Context, user, from string, to string) ([]entity.ReplicationStatusID, error)
 
 	// public config accessor
 	Config() *s3.StorageConfig
@@ -203,9 +207,16 @@ func (r *policySvc) buildQueueStats(ctx context.Context, queues []string) (bool,
 	return isPaused, result, nil
 }
 
-func (r *policySvc) ObjListStarted(ctx context.Context, id entity.ReplicationStatusID) error {
-	if err := r.replicationStatusStore.SetListingStarted(ctx, id); err != nil {
-		return fmt.Errorf("unable to set listing started: %w", err)
+func (r *policySvc) LiveSyncStarted(ctx context.Context, id entity.ReplicationStatusID) error {
+	if err := r.replicationStatusStore.SetLiveSync(ctx, id); err != nil {
+		return fmt.Errorf("unable to set live sync: %w", err)
+	}
+	return nil
+}
+
+func (r *policySvc) ListingDone(ctx context.Context, id entity.ReplicationStatusID) error {
+	if err := r.replicationStatusStore.SetListingDone(ctx, id); err != nil {
+		return fmt.Errorf("unable to set listing done: %w", err)
 	}
 	return nil
 }
@@ -547,22 +558,22 @@ func (r *policySvc) DeleteUserReplication(ctx context.Context, user string, poli
 	return nil
 }
 
-func (r *policySvc) DeleteBucketReplicationsByUser(ctx context.Context, user, fromStorage string, toStorage string) ([]string, error) {
+func (r *policySvc) DeleteBucketReplicationsByUser(ctx context.Context, user, fromStorage string, toStorage string) ([]entity.ReplicationStatusID, error) {
 	ids, err := r.replicationStatusStore.GetAllIDs(ctx, user)
 	if err != nil {
 		return nil, fmt.Errorf("unable to get replication ids: %w", err)
 	}
 
-	deleted := []string{}
+	deleted := []entity.ReplicationStatusID{}
 	for _, id := range ids {
 		if id.FromStorage != fromStorage || id.ToStorage != toStorage {
 			continue
 		}
-		if err := r.DeleteReplication(ctx, id); err != nil {
+		if err := r.DropReplicationRecords(ctx, id); err != nil {
 			zerolog.Ctx(ctx).Err(err).Msg("unable to delte replication")
 			continue
 		}
-		deleted = append(deleted, id.FromBucket)
+		deleted = append(deleted, id)
 	}
 	return deleted, nil
 }
@@ -664,7 +675,13 @@ func (r *policySvc) ResumeReplication(ctx context.Context, id entity.Replication
 	return nil
 }
 
-func (r *policySvc) DeleteReplication(ctx context.Context, id entity.ReplicationStatusID) error {
+// DropReplicationRecords removes the stored replication policy and status
+// records. It does not touch the replication's task queues: forcing a queue
+// delete only works once none of its tasks are active, which while a
+// replication is running is virtually never the case, so it would almost
+// always fail and leave the queue's tasks to run against a policy that no
+// longer exists. There is no DeleteReplication API for the same reason.
+func (r *policySvc) DropReplicationRecords(ctx context.Context, id entity.ReplicationStatusID) error {
 	bucketReplicationPolicyID := entity.NewBucketReplicationPolicyID(id.User, id.FromBucket)
 	bucketReplicationPolicy := entity.NewBucketReplicationPolicy(id.FromStorage, id.ToStorage, id.ToBucket)
 	exec := r.bucketReplicationPolicyStore.TxExecutor()
@@ -673,14 +690,6 @@ func (r *policySvc) DeleteReplication(ctx context.Context, id entity.Replication
 	_ = r.bucketRoutingBlockStore.WithExecutor(exec).RemoveOp(ctx, id.ToStorage, id.ToBucket)
 	if err := exec.Exec(ctx); err != nil {
 		return fmt.Errorf("unable to execute group: %w", err)
-	}
-	queues := tasks.AllReplicationQueues(id)
-	for _, queue := range queues {
-		err := r.queueSvc.Delete(ctx, queue, true)
-		if err != nil && !errors.Is(err, dom.ErrNotFound) {
-			zerolog.Ctx(ctx).Err(err).Msgf("unable to delete queue %s", queue)
-			continue
-		}
 	}
 	return nil
 }

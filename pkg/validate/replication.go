@@ -17,19 +17,35 @@ package validate
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/clyso/chorus/pkg/dom"
 	"github.com/clyso/chorus/pkg/entity"
 )
+
+// Identifier reports whether name is fit to use as a user or storage name. A
+// replication queue is named after the identifiers of the replication it
+// belongs to, joined with ":", so one of them containing ":" would make the
+// queue name ambiguous to parse back.
+func Identifier(field, name string) error {
+	if strings.Contains(name, ":") {
+		return fmt.Errorf("%w: %s must not contain ':'", dom.ErrInvalidArg, field)
+	}
+	return nil
+}
 
 func ReplicationStatusID(id entity.ReplicationStatusID) error {
 	errs := make([]error, 0)
 	if id.User == "" {
 		err := fmt.Errorf("%w: user is required", dom.ErrInvalidArg)
 		errs = append(errs, err)
+	} else if err := Identifier("user", id.User); err != nil {
+		errs = append(errs, err)
 	}
 	if id.FromStorage == "" {
 		err := fmt.Errorf("%w: from storage is required", dom.ErrInvalidArg)
+		errs = append(errs, err)
+	} else if err := Identifier("from storage", id.FromStorage); err != nil {
 		errs = append(errs, err)
 	}
 	if id.FromBucket == "" {
@@ -38,6 +54,8 @@ func ReplicationStatusID(id entity.ReplicationStatusID) error {
 	}
 	if id.ToStorage == "" {
 		err := fmt.Errorf("%w: to storage is required", dom.ErrInvalidArg)
+		errs = append(errs, err)
+	} else if err := Identifier("to storage", id.ToStorage); err != nil {
 		errs = append(errs, err)
 	}
 	if id.ToBucket == "" {
@@ -60,6 +78,8 @@ func BucketRoutingPolicyID(id entity.BucketRoutingPolicyID) error {
 	if id.User == "" {
 		err := fmt.Errorf("%w: user is required", dom.ErrInvalidArg)
 		errs = append(errs, err)
+	} else if err := Identifier("user", id.User); err != nil {
+		errs = append(errs, err)
 	}
 	if id.Bucket == "" {
 		err := fmt.Errorf("%w: bucket is required", dom.ErrInvalidArg)
@@ -75,6 +95,8 @@ func BucketReplicationPolicyID(id entity.BucketReplicationPolicyID) error {
 	errs := make([]error, 0)
 	if id.User == "" {
 		err := fmt.Errorf("%w: user is required", dom.ErrInvalidArg)
+		errs = append(errs, err)
+	} else if err := Identifier("user", id.User); err != nil {
 		errs = append(errs, err)
 	}
 	if id.FromBucket == "" {

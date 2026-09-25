@@ -21,13 +21,13 @@
 // slow, the readFromDestination option lets the proxy answer reads of objects
 // that the migration has already copied from the destination storage instead.
 //
-// An object counts as migrated when its copy task has completed. Copy tasks are
-// enqueued with a retention period, so a completed task stays in its queue and
-// serves as the per object record of the finished copy. Everything the proxy
-// wrote afterwards is visible in the object version metadata, so a destination
+// While the initial sync runs, an object counts as migrated when the worker has
+// recorded its copy, which it does per replication in a set of object names.
+// Once it is done, everything counts as migrated and the records are dropped by
+// the copy that ends the initial sync, see liveSync(). Everything the proxy wrote
+// afterwards is visible in the object version metadata, so a destination
 // version behind the source version disqualifies the object again. Objects
-// deleted through the proxy have their copy record removed, see
-// dropMigratedRecord().
+// deleted through the proxy have their record removed, see objectDeleted().
 //
 // The decision is per object and never trusted blindly: a destination that
 // cannot answer the read makes the request fall back to the source storage.
@@ -40,9 +40,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
-	"github.com/hibiken/asynq"
 	"github.com/rs/zerolog"
 
 	xctx "github.com/clyso/chorus/pkg/ctx"
@@ -52,13 +50,13 @@ import (
 	"github.com/clyso/chorus/pkg/meta"
 	"github.com/clyso/chorus/pkg/metrics"
 	"github.com/clyso/chorus/pkg/s3"
-	"github.com/clyso/chorus/pkg/tasks"
+	"github.com/clyso/chorus/pkg/settings"
 )
 
 // Reasons for keeping a read on the source storage although reading from the
 // destination is enabled. They are exported as the reason label of the
 // proxy_destination_reads_skipped_total metric, so the set stays small and
-// stable. The copy task states are reported with the skipCopyStatePrefix.
+// stable.
 const (
 	skipSwitchInProgress  = "switch_in_progress"
 	skipNoObject          = "no_object"
@@ -70,9 +68,9 @@ const (
 	skipPolicyError       = "policy_error"
 	skipMetaError         = "meta_error"
 	skipDestinationBehind = "destination_behind"
-	skipQueueError        = "queue_error"
+	skipRecordError       = "record_error"
 	skipNotCopied         = "not_copied"
-	skipCopyStatePrefix   = "copy_"
+	skipPendingDelete     = "pending_delete"
 )
 
 // destinationReadRoute tells whether the request may be served by the
@@ -80,7 +78,7 @@ const (
 // destination storage and bucket to use. A switch in progress owns the routing
 // of the bucket and is left alone.
 func (r *router) destinationReadRoute(req *http.Request, source, user, bucket string, switchInProgress bool) (destStorage, destBucket string, ok bool) {
-	if !r.readFromDestination {
+	if !settings.ReadFromDestination.Get() {
 		return "", "", false
 	}
 	destStorage, destBucket, reason := r.destinationReadDecision(req, source, user, bucket, switchInProgress)
@@ -156,9 +154,10 @@ func (r *router) migrationDestination(ctx context.Context, source, user, bucket 
 	return policies.Destinations[0], ""
 }
 
-// objectMigrated returns an empty reason if the object has been copied to the
-// destination and has not been written through the proxy since. Any other
-// reason keeps the read on the source storage.
+// objectMigrated returns an empty reason if the object can be read from the
+// destination: it has been copied there and has not been written or deleted
+// through the proxy since. Any other reason keeps the read on the source
+// storage.
 func (r *router) objectMigrated(ctx context.Context, source, user, bucket, object string, dest entity.ReplicationPolicyDestination) string {
 	objMeta, err := r.versionSvc.GetObj(ctx, dom.Object{Bucket: bucket, Name: object})
 	if err != nil {
@@ -170,42 +169,59 @@ func (r *router) objectMigrated(ctx context.Context, source, user, bucket, objec
 		return skipDestinationBehind
 	}
 
-	queue, taskID := migrationCopyTask(source, user, bucket, object, dest)
-	// asynq brings its own redis client, which the timing hook does not see
-	queueStart := time.Now()
-	state, err := r.queueSvc.GetTaskState(ctx, queue, taskID)
-	xctx.GetTiming(ctx).AddRedis(time.Since(queueStart))
-	if err != nil {
-		if errors.Is(err, dom.ErrNotFound) {
-			// not copied yet, or the record is gone
-			return skipNotCopied
+	id := migrationID(source, user, bucket, dest)
+	if r.liveSync(ctx, id) {
+		// everything the listing found has been copied, so the destination
+		// holds the object unless its deletion is still on its way there
+		pending, err := r.storageSvc.IsPendingDeleteObj(ctx, id, object)
+		if err != nil {
+			zerolog.Ctx(ctx).Err(err).Msg("read from destination: unable to read the pending delete record")
+			return skipRecordError
 		}
-		zerolog.Ctx(ctx).Err(err).Msg("read from destination: unable to get copy task state")
-		return skipQueueError
+		if pending {
+			return skipPendingDelete
+		}
+		return ""
 	}
-	if state != asynq.TaskStateCompleted {
-		// queued for a copy, or the copy failed for good
-		return skipCopyStatePrefix + state.String()
+
+	migrated, err := r.storageSvc.IsMigratedObj(ctx, id, object)
+	if err != nil {
+		zerolog.Ctx(ctx).Err(err).Msg("read from destination: unable to read the migrated object record")
+		return skipRecordError
+	}
+	if !migrated {
+		return skipNotCopied
 	}
 	return ""
 }
 
-// migrationCopyTask returns queue and task id of the object copy task that
-// migrates the object to the given destination.
-func migrationCopyTask(source, user, bucket, object string, dest entity.ReplicationPolicyDestination) (queue, taskID string) {
-	replicationID := entity.NewReplicationStatusID(user, source, bucket, dest.Storage, dest.Bucket)
-	// Versioned migrations are not supported here, so the copy task of the
-	// current object version has no version id.
-	return tasks.MigrateObjCopyQueue(replicationID), tasks.MigrateObjCopyTaskID(source, dest.Storage, bucket, dest.Bucket, object, "")
+// liveSync reports whether the migration has copied everything its listing
+// found and only replicates what happens since. The copy that ended the
+// initial sync records it and drops the per object records with it, so from
+// then on every object counts as copied and what the destination does not have
+// yet is a deletion or a write in flight, both of which say so elsewhere.
+func (r *router) liveSync(ctx context.Context, id entity.ReplicationStatusID) bool {
+	status, err := r.policySvc.GetReplicationPolicyInfo(ctx, id)
+	if err != nil {
+		zerolog.Ctx(ctx).Err(err).Msg("read from destination: unable to get replication status")
+		return false
+	}
+	return status.LiveSync
 }
 
-// dropMigratedRecord removes the record that the object has been migrated. The
-// object no longer exists on the source storage, and until the deletion has
-// been replicated the destination still holds it, so reads have to go back to
-// the source storage. Dropping the record also allows the object to be copied
-// again should it reappear.
-func (r *router) dropMigratedRecord(ctx context.Context, source, object string) {
-	if !r.readFromDestination {
+// migrationID names the replication the bucket is migrated by.
+func migrationID(source, user, bucket string, dest entity.ReplicationPolicyDestination) entity.ReplicationStatusID {
+	return entity.NewReplicationStatusID(user, source, bucket, dest.Storage, dest.Bucket)
+}
+
+// objectDeleted records that the object was deleted through the proxy. The
+// object is gone from the source storage while the destination still holds it
+// until the deletion has been replicated, so it must not be read from there:
+// its migrated record goes and a pending delete takes its place. Dropping the
+// migrated record also allows the object to be copied again should it
+// reappear.
+func (r *router) objectDeleted(ctx context.Context, source, object string) {
+	if !settings.ReadFromDestination.Get() {
 		return
 	}
 	user, bucket := xctx.GetUser(ctx), xctx.GetBucket(ctx)
@@ -213,9 +229,9 @@ func (r *router) dropMigratedRecord(ctx context.Context, source, object string) 
 	if reason != "" {
 		return
 	}
-	queue, taskID := migrationCopyTask(source, user, bucket, object, dest)
-	if err := r.queueSvc.DeleteTask(ctx, queue, taskID); err != nil {
-		zerolog.Ctx(ctx).Err(err).Str(log.Object, object).Msg("read from destination: unable to drop migrated object record")
+	id := migrationID(source, user, bucket, dest)
+	if err := r.storageSvc.ObjectDeleted(ctx, id, object); err != nil {
+		zerolog.Ctx(ctx).Err(err).Str(log.Object, object).Msg("read from destination: unable to record the deleted object")
 	}
 }
 

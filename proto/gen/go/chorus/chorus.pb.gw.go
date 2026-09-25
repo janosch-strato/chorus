@@ -227,30 +227,6 @@ func local_request_Chorus_ResumeReplication_0(ctx context.Context, marshaler run
 	return msg, metadata, err
 }
 
-func request_Chorus_DeleteReplication_0(ctx context.Context, marshaler runtime.Marshaler, client ChorusClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
-	var (
-		protoReq ReplicationRequest
-		metadata runtime.ServerMetadata
-	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
-	msg, err := client.DeleteReplication(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
-	return msg, metadata, err
-}
-
-func local_request_Chorus_DeleteReplication_0(ctx context.Context, marshaler runtime.Marshaler, server ChorusServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
-	var (
-		protoReq ReplicationRequest
-		metadata runtime.ServerMetadata
-	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
-	msg, err := server.DeleteReplication(ctx, &protoReq)
-	return msg, metadata, err
-}
-
 func request_Chorus_DeleteUserReplication_0(ctx context.Context, marshaler runtime.Marshaler, client ChorusClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq DeleteUserReplicationRequest
@@ -800,26 +776,6 @@ func RegisterChorusHandlerServer(ctx context.Context, mux *runtime.ServeMux, ser
 		}
 		forward_Chorus_ResumeReplication_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPut, pattern_Chorus_DeleteReplication_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
-		ctx, cancel := context.WithCancel(req.Context())
-		defer cancel()
-		var stream runtime.ServerTransportStream
-		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
-		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/chorus.Chorus/DeleteReplication", runtime.WithHTTPPathPattern("/replication/delete"))
-		if err != nil {
-			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		resp, md, err := local_request_Chorus_DeleteReplication_0(annotatedContext, inboundMarshaler, server, req, pathParams)
-		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
-		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
-		if err != nil {
-			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		forward_Chorus_DeleteReplication_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
-	})
 	mux.Handle(http.MethodPut, pattern_Chorus_DeleteUserReplication_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
@@ -1313,23 +1269,6 @@ func RegisterChorusHandlerClient(ctx context.Context, mux *runtime.ServeMux, cli
 		}
 		forward_Chorus_ResumeReplication_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPut, pattern_Chorus_DeleteReplication_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
-		ctx, cancel := context.WithCancel(req.Context())
-		defer cancel()
-		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/chorus.Chorus/DeleteReplication", runtime.WithHTTPPathPattern("/replication/delete"))
-		if err != nil {
-			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		resp, md, err := request_Chorus_DeleteReplication_0(annotatedContext, inboundMarshaler, client, req, pathParams)
-		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
-		if err != nil {
-			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		forward_Chorus_DeleteReplication_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
-	})
 	mux.Handle(http.MethodPut, pattern_Chorus_DeleteUserReplication_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
@@ -1598,7 +1537,6 @@ var (
 	pattern_Chorus_ListUserReplications_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"replication", "user"}, ""))
 	pattern_Chorus_PauseReplication_0                 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"replication", "pause"}, ""))
 	pattern_Chorus_ResumeReplication_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"replication", "resume"}, ""))
-	pattern_Chorus_DeleteReplication_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"replication", "delete"}, ""))
 	pattern_Chorus_DeleteUserReplication_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2}, []string{"replication", "user", "delete"}, ""))
 	pattern_Chorus_SwitchBucketZeroDowntime_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2}, []string{"replication", "switch", "zero-downtime"}, ""))
 	pattern_Chorus_SwitchBucket_0                     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"replication", "switch"}, ""))
@@ -1626,7 +1564,6 @@ var (
 	forward_Chorus_ListUserReplications_0             = runtime.ForwardResponseMessage
 	forward_Chorus_PauseReplication_0                 = runtime.ForwardResponseMessage
 	forward_Chorus_ResumeReplication_0                = runtime.ForwardResponseMessage
-	forward_Chorus_DeleteReplication_0                = runtime.ForwardResponseMessage
 	forward_Chorus_DeleteUserReplication_0            = runtime.ForwardResponseMessage
 	forward_Chorus_SwitchBucketZeroDowntime_0         = runtime.ForwardResponseMessage
 	forward_Chorus_SwitchBucket_0                     = runtime.ForwardResponseMessage

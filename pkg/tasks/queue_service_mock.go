@@ -38,6 +38,10 @@ type QueueServiceMock struct {
 	Tasks map[string]map[string]asynq.TaskState
 }
 
+func (q *QueueServiceMock) QueuedEmpty(_ context.Context, queue string) (bool, error) {
+	return q.Queues[queue] == 0, nil
+}
+
 // SetTaskState test helper to put a task with the given state into a queue
 func (q *QueueServiceMock) SetTaskState(queueName, taskID string, state asynq.TaskState) {
 	if q.Tasks == nil {

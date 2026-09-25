@@ -14,30 +14,31 @@
  * limitations under the License.
  */
 
-package tasks
+package settings
 
 import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/clyso/chorus/pkg/dom"
+	"github.com/clyso/chorus/pkg/switches"
 )
 
 func Test_ListingSpeed(t *testing.T) {
 	r := require.New(t)
-	defer func() { r.NoError(SetListingSpeed(ListingFull)) }()
+	defer func() { r.NoError(ListingSpeed.SetString("")) }()
 
-	r.Equal(ListingFull, GetListingSpeed(), "full speed unless configured otherwise")
+	r.Equal(ListingFull, ListingSpeed.Get(), "full speed unless configured otherwise")
 
-	r.NoError(SetListingSpeed(ListingAuto))
-	r.Equal(ListingAuto, GetListingSpeed())
+	r.NoError(ListingSpeed.SetString("auto"))
+	r.Equal(ListingAuto, ListingSpeed.Get())
+	r.Equal("auto", ListingSpeed.GetString())
 
 	// an unset config value keeps the default rather than failing a startup
-	r.NoError(SetListingSpeed(""))
-	r.Equal(ListingFull, GetListingSpeed())
+	r.NoError(ListingSpeed.SetString(""))
+	r.Equal(ListingFull, ListingSpeed.Get())
 
-	r.NoError(SetListingSpeed(ListingAuto))
-	r.ErrorIs(SetListingSpeed("paused"), dom.ErrInvalidArg)
-	r.Equal(ListingAuto, GetListingSpeed(), "a rejected speed changes nothing")
+	r.NoError(ListingSpeed.SetString("auto"))
+	r.ErrorIs(ListingSpeed.SetString("paused"), switches.ErrInvalidValue)
+	r.Equal(ListingAuto, ListingSpeed.Get(), "a rejected speed changes nothing")
 }

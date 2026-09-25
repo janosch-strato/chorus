@@ -299,40 +299,6 @@
         ]
       }
     },
-    "/replication/delete": {
-      "put": {
-        "summary": "Deletes given replication",
-        "operationId": "Chorus_DeleteReplication",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "type": "object",
-              "properties": {}
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/googlerpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/chorusReplicationRequest"
-            }
-          }
-        ],
-        "tags": [
-          "Chorus"
-        ]
-      }
-    },
     "/replication/get": {
       "post": {
         "operationId": "Chorus_GetReplication",

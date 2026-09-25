@@ -198,6 +198,10 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, flushRedis bool) 
 	if err != nil {
 		return err
 	}
+	if workerConf.Worker != nil {
+		// one setting for both: the proxy reads what the worker records
+		workerConf.Worker.ReadFromDestination = conf.Proxy.ReadFromDestination
+	}
 	// start worker — the worker subsystem owns the single metrics/pprof
 	// listener in standalone; proxy.Start is invoked with serveMetrics=false
 	// so the two don't fight over the same port.
@@ -213,6 +217,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, flushRedis bool) 
 			Address:             conf.Proxy.Address,
 			Storage:             conf.Storage,
 			Cors:                conf.Proxy.Cors,
+			HeadBucketCache:     conf.Proxy.HeadBucketCache,
 			ReadFromDestination: conf.Proxy.ReadFromDestination,
 		}
 		if len(proxyConf.Redis.Addresses) == 0 {

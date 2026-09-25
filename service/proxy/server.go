@@ -40,6 +40,7 @@ import (
 	"github.com/clyso/chorus/pkg/rpc"
 	"github.com/clyso/chorus/pkg/s3"
 	"github.com/clyso/chorus/pkg/s3client"
+	"github.com/clyso/chorus/pkg/settings"
 	"github.com/clyso/chorus/pkg/storage"
 	"github.com/clyso/chorus/pkg/tasks"
 	"github.com/clyso/chorus/pkg/trace"
@@ -91,6 +92,13 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	appRedis.AddHook(util.TimingHook{})
 	logger.Info().Msg("app redis connected")
 
+	if err = settings.ReadFromDestination.Set(conf.ReadFromDestination); err != nil {
+		return err
+	}
+	if err = settings.HeadBucketCache.SetString(conf.HeadBucketCache); err != nil {
+		return err
+	}
+
 	verSvc := meta.NewVersionService(appRedis)
 	storageSvc := storage.New(appRedis)
 	limiter := ratelimit.New(appRedis, conf.Storage.RateLimitConf())
@@ -106,8 +114,12 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	taskClient := asynq.NewClient(queueRedis)
 	defer taskClient.Close()
 	inspector := asynq.NewInspector(queueRedis)
+	// a plain client on the queue db, for the cheap queue reads the inspector
+	// has no api for
+	queueClient := util.NewRedis(conf.Redis, conf.Redis.QueueDB)
+	defer queueClient.Close()
 	defer inspector.Close()
-	queueSvc := tasks.NewQueueService(inspector)
+	queueSvc := tasks.NewQueueService(inspector, queueClient)
 	policySvc := policy.NewService(confRedis, queueSvc, conf.Storage)
 
 	metricsSvc := metrics.NewS3Service(conf.Metrics.Enabled)
@@ -118,7 +130,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	}
 	logger.Info().Msg("s3 clients connected")
 
-	routeSvc := router.NewRouter(s3Clients, taskClient, verSvc, policySvc, storageSvc, queueSvc, limiter, conf.ReadFromDestination)
+	routeSvc := router.NewRouter(s3Clients, taskClient, verSvc, policySvc, storageSvc, limiter)
 	replSvc := replication.New(taskClient, verSvc, policySvc)
 	handler := router.Serve(routeSvc, replSvc)
 	handler = auth.Middleware(conf.Auth, conf.Storage.Storages).Wrap(handler)
