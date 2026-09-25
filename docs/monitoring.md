@@ -129,10 +129,42 @@ semaphores; `agent_requests_total{status}`; and the rclone gauges
 
 ## Sending it to graphite
 
-Chorus serves its metrics and nothing else: the poller that already visits
-these hosts reads the endpoint and hands the result on.
-`tools/mon/bin/chorus-scrape-carbon.pl` is the piece in between, turning one
-scrape into carbon plaintext on stdout:
+Chorus serves its metrics and nothing else; what visits the endpoint and
+hands the result on is the monitoring already installed on these hosts. The
+files under `tools/mon` are shaped for it: a collector, the scrape it runs,
+and the path rules both tools share.
+
+```
+tools/mon/collectors/chorus/metrics.pl   the collector
+tools/mon/bin/chorus-scrape-carbon.pl    one scrape, as carbon plaintext
+tools/mon/bin/chorus-log-backfill.pl     the backfill, see below
+tools/mon/lib/GraphitePath.pm            the paths both of them build
+```
+
+**The collector.** Run with `--config` it names one run per directory under
+`/opt/s3float`, which is what the bucket's render does:
+
+```
+$ collectors/chorus/metrics.pl --config
+interval=60s args=--instance mig21
+interval=60s args=--instance mig26
+interval=60s args=--instance mig30
+```
+
+Nothing beyond the name of the directory goes into that config, so a
+migration that is stopped, started, disabled or moved to another port never
+needs a render; only a directory appearing or going away does. The run asks
+the instance itself, through its own `print-config`, whether it serves
+metrics and on which port, and scrapes it under `s3mig.<instance>`, where a
+backfill of that migration's logs writes it too.
+
+An instance that is not running, not built, has its metrics disabled or does
+not answer ends the run with nothing written anywhere and an exit code of
+zero: a prepared but idle instance is the ordinary state of a host between
+migrations, a line per instance per interval saying so would bury the log,
+and the manager takes a non-zero exit as a reason to tear its worker down.
+
+**By hand**, the scrape works on its own, reading stdin or fetching:
 
 ```sh
 curl -s http://127.0.0.1:9090/metrics |
