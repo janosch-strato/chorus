@@ -1,20 +1,18 @@
 # Monitoring chorus
 
-Every chorus process serves its metrics itself, and can push them to a
-graphite carbon receiver on top. Both come from the same set of metrics, so
-what a dashboard can ask of one it can ask of the other.
+Every chorus process serves its metrics itself.
 
-## The endpoint
-
-With
+## Configuration
 
 ```yaml
 metrics:
   enabled: true
   port: 9090
 ```
+## The endpoints
 
-each process serves on that port:
+If metrics are enabled in the config, each process serves the following endpoints
+on the configured port:
 
 | path             | what                                                    |
 |------------------|---------------------------------------------------------|
@@ -35,9 +33,6 @@ second by the status they were answered with. `proxy_storage_status_total`
 counts the same statuses one step earlier, as the storage gave them, by
 `storage` and `status`: the middleware behind `proxy_response_status` cannot
 see which storage was asked, and also counts the requests that reached none.
-Chorus treats every status outside 200, 204 and 206 as an error, so a storage
-answering 404 or 503 ends the request early; both paths count, or the metric
-would hold nothing but the successes.
 `proxy_request_duration_seconds{method,storage}` is the request as the client
 saw it, both transfers included, so a slow client makes it grow;
 `proxy_request_internal_duration_seconds` ends when the storage answered and
@@ -53,10 +48,8 @@ counts the api calls chorus makes, with `status` one of `ok`, `client_error`,
 counted, not skipped. The last two are worth keeping apart: `network_error` is
 a storage that could not be reached, while `internal_error` is a call that
 never left this process or was cancelled, and only the first says anything
-about the storage. `storage_request_duration_seconds` carries the same labels,
-the status included, so a slow average can be read per outcome instead of
-guessed at — and a call that failed is timed as well, which it was not while
-the duration was only recorded on the way out of a successful one. `storage_requests_in_flight{storage,method}` is what a storage
+about the storage. `storage_request_duration_seconds` carries the same labels.
+`storage_requests_in_flight{storage,method}` is what a storage
 currently owes an answer for, `storage_http_duration_seconds` covers the sdk
 calls that never go through the proxy, such as acl and tag sync, and
 `storage_bucket_bytes_upload` / `_download{flow,storage,bucket}` the bytes
@@ -238,25 +231,18 @@ tools/mon/bin/chorus-log-backfill.pl --prefix s3mig.mig22.proxy \
 
 The prefix names one instance, the same one the scrape of a running instance
 is given, so a backfilled series continues the live one instead of colliding
-with it — which means one run per instance, with that instance's logs. Without `--carbon` the carbon plaintext goes to stdout, which is the way
-to look at it first. It reads a hundred megabytes of log per second where
-most lines are of no interest and about ten where every line is a copy, plain
-files, `.gz` files, or stdin when no file is named.
+with it — which means one run per instance, with that instance's logs. Without
+`--carbon` the carbon plaintext goes to stdout, which is the way
+to look at it first.
 
-Nothing is held for the whole run. Logs are in time order, so an interval is
-written as soon as the reader has moved past it and the points start flowing
-within a fraction of a second, whatever the size of the input. What is kept is
-a running total per series plus the intervals and copies inside the window, so
-the memory follows the window and the rate rather than the log: a 400 MB log
+Nothing is held for the whole run. What is kept is a running total per series
+plus the intervals and copies inside a configurable lag-window.
+The memory follows the window and the rate rather than the log: a 400 MB log
 of 2 million copies goes through in 14 MB, and feeding it more files or bigger
 ones does not change that.
 
-A run against real logs takes minutes, so it writes a line to the terminal
-once a second saying how much log it has read, how many proxy requests and
-copies it has seen and how many datapoints it has written. It appears when the
-terminal is free to carry it, which means either `--carbon` or a redirected
-stdout; with the datapoints themselves going to the terminal there would be
-nothing to read, and the line stays away. It is erased before the closing
+A status-line is written when the terminal is free to carry it, which means
+either `--carbon` or a redirected stdout. It is erased before the closing
 summary, and nothing about it reaches a pipe or a file.
 
 `--lag-window` is how long an interval stays open, 900s by default. Only the
