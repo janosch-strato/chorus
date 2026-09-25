@@ -95,7 +95,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	queueClient := util.NewRedis(conf.Redis, conf.Redis.QueueDB)
 	defer queueClient.Close()
 	defer inspector.Close()
-	queueSvc := tasks.NewQueueService(inspector, appRedis)
+	queueSvc := tasks.NewQueueService(inspector, queueClient)
 	policySvc := policy.NewService(confRedis, queueSvc, nil)
 
 	replSvc := replication.New(taskClient, verSvc, policySvc)

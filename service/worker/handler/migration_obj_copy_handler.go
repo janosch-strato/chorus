@@ -166,16 +166,26 @@ func (s *svc) HandleMigrationObjCopy(ctx context.Context, t *asynq.Task) (err er
 	return nil
 }
 
-// endInitialSync ends the initial sync of the migration if this copy was the
-// last one waiting for it. From then on the destination holds everything the
-// listing found, so the proxy reads it from there without asking for the per
-// object records, and the records go.
+// endInitialSync ends the initial sync of the migration if the listing is
+// done and this copy was the last one waiting for it. From then on the
+// destination holds everything the listing found, so the proxy reads it from
+// there without asking for the per object records, and the records go.
+//
+// The listing check matters because the copy queue can run empty while the
+// listing is still filling it.
 //
 // Copies still running are not waited for. A read of one of those objects
 // finds it missing on the destination and falls back to the source, which is
 // what the fallback is for, and there are only as many of them as the worker
 // runs at once.
 func (s *svc) endInitialSync(ctx context.Context, replicationID entity.ReplicationStatusID) error {
+	status, err := s.policySvc.GetReplicationPolicyInfo(ctx, replicationID)
+	if err != nil {
+		return fmt.Errorf("migration obj copy: unable to get replication status: %w", err)
+	}
+	if !status.ListingDone {
+		return nil
+	}
 	empty, err := s.queueSvc.QueuedEmpty(ctx, tasks.MigrateObjCopyQueue(replicationID))
 	if err != nil {
 		return fmt.Errorf("migration obj copy: unable to check the copy queue: %w", err)
