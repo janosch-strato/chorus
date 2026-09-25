@@ -130,9 +130,8 @@ func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsS
 			case <-ctx.Done():
 				return
 			case <-timer.C:
-				// Do health check the first time and ONLY if the connection is marked offline
 				if !c.online.Load() {
-					if probeErr := isOnline(ctx, c); probeErr != nil {
+					if probeErr := isOnline(ctx, c); probeErr == nil {
 						c.online.Store(true)
 					}
 				}
