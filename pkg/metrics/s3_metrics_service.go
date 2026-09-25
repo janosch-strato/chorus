@@ -29,10 +29,34 @@ import (
 var requestDuration = promauto.NewHistogramVec(
 	prometheus.HistogramOpts{
 		Name:    "storage_request_duration_seconds",
-		Help:    "Duration of api calls to s3 storage.",
+		Help:    "Duration of api calls to s3 storage, by the outcome they ended in.",
 		Buckets: storageLatencyBuckets,
 	},
-	[]string{"flow", "storage", "method"},
+	[]string{"flow", "storage", "method", "status"},
+)
+
+// ReqStatus is the bounded outcome vocabulary for the "status" label
+// on storage_requests_total. Keeping it to a handful of classes (vs.
+// raw HTTP codes) bounds cardinality and lets the data path and the
+// control-plane share one label vocabulary.
+type ReqStatus string
+
+const (
+	StatusOK ReqStatus = "ok"
+	// StatusRedirect is a storage pointing the request elsewhere, which
+	// chorus does not follow: a 301 for a bucket in another region, a 307
+	// while one is being created. The storage answered, but the request did
+	// not get what it asked for, so it is neither a success nor a fault of
+	// the storage.
+	StatusRedirect   ReqStatus = "redirect"
+	StatusClientErr  ReqStatus = "client_error"
+	StatusServerErr  ReqStatus = "server_error"
+	StatusNetworkErr ReqStatus = "network_error"
+	// StatusInternalErr is a call the storage never answered and never
+	// refused: it was given up on before it left, or cancelled. Kept apart
+	// from network_error so that the one class meaning "the storage is
+	// unreachable" says only that.
+	StatusInternalErr ReqStatus = "internal_error"
 )
 
 var countRequests = promauto.NewCounterVec(
@@ -40,7 +64,7 @@ var countRequests = promauto.NewCounterVec(
 		Name: "storage_requests_total",
 		Help: "Number of api calls to s3 storage.",
 	},
-	[]string{"flow", "storage", "method"},
+	[]string{"flow", "storage", "method", "status"},
 )
 
 var bytesUpload = promauto.NewCounterVec(
@@ -80,10 +104,32 @@ var rcloneFilesNum = promauto.NewGauge(
 	},
 )
 
+// rcloneFsCache counts cached rclone Fs instances. Each distinct
+// (storage, bucket, user) Fs owns one HTTP transport / connection
+// pool shared across copy tasks, so this is the pool-layer signal for
+// rclone — rclone builds its own dialer internally, so true per-socket
+// open/close counts are not available the way they are for the http
+// layer (see metrics.ConnLayerHTTP).
+var rcloneFsCache = promauto.NewGauge(
+	prometheus.GaugeOpts{
+		Name: "rclone_fs_cache_entries",
+		Help: "Number of cached rclone Fs instances (shared connection pools).",
+	},
+)
+
 type S3Service interface {
+	// Count records a successful api call (status="ok"). It is the
+	// convenience form for the many call sites that only fire on
+	// success; for paths that observe the real outcome use CountStatus.
 	Count(flow xctx.Flow, storage string, method s3.Method)
-	// Duration records how long a storage took to answer an api call.
-	Duration(flow xctx.Flow, storage string, method s3.Method, d time.Duration)
+	// CountStatus records an api call with an explicit outcome class,
+	// so the same storage_requests_total series also carries error
+	// counts under its "status" label.
+	CountStatus(flow xctx.Flow, storage string, method s3.Method, status ReqStatus)
+	// Duration records how long a storage took to answer an api call, with
+	// the outcome it ended in: an average that mixes the calls that failed
+	// with the ones that worked explains neither.
+	Duration(flow xctx.Flow, storage string, method s3.Method, status ReqStatus, d time.Duration)
 	Upload(flow xctx.Flow, storage, bucket string, bytes int)
 	Download(flow xctx.Flow, storage, bucket string, bytes int)
 
@@ -93,6 +139,9 @@ type S3Service interface {
 	RcloneCalcFileSizeDec(bytes int64)
 	RcloneCalcFileNumInc()
 	RcloneCalcFileNumDec()
+	// RcloneFsCacheInc records that a new rclone Fs (and its connection
+	// pool) was added to the cache.
+	RcloneFsCacheInc()
 }
 
 func NewS3Service(enabled bool) S3Service {
@@ -145,21 +194,33 @@ func (s svcS3) RcloneCalcFileNumDec() {
 	rcloneFilesNum.Sub(float64(1))
 }
 
+func (s svcS3) RcloneFsCacheInc() {
+	if !s.enabled {
+		return
+	}
+	rcloneFsCache.Inc()
+}
+
 func (s svcS3) Count(flow xctx.Flow, storage string, method s3.Method) {
+	s.CountStatus(flow, storage, method, StatusOK)
+}
+
+func (s svcS3) CountStatus(flow xctx.Flow, storage string, method s3.Method, status ReqStatus) {
 	if !s.enabled {
 		return
 	}
 	countRequests.With(prometheus.Labels{
 		"flow":    string(flow),
 		"storage": storage,
-		"method":  method.String()}).Inc()
+		"method":  method.String(),
+		"status":  string(status)}).Inc()
 }
 
-func (s svcS3) Duration(flow xctx.Flow, storage string, method s3.Method, d time.Duration) {
+func (s svcS3) Duration(flow xctx.Flow, storage string, method s3.Method, status ReqStatus, d time.Duration) {
 	if !s.enabled {
 		return
 	}
-	requestDuration.WithLabelValues(string(flow), storage, method.String()).Observe(d.Seconds())
+	requestDuration.WithLabelValues(string(flow), storage, method.String(), string(status)).Observe(d.Seconds())
 }
 
 func (s svcS3) Upload(flow xctx.Flow, storage, bucket string, bytes int) {

@@ -351,7 +351,10 @@ func (s *svc) getFS(ctx context.Context, storage, bucket string, headObject bool
 	 * creating this Fs; LoadOrStore returns whichever instance won. The
 	 * loser's Fs is discarded and gets GC'd along with its transport.
 	 */
-	actual, _ := s.fsCache.LoadOrStore(key, f)
+	actual, loaded := s.fsCache.LoadOrStore(key, f)
+	if !loaded {
+		s.metricsSvc.RcloneFsCacheInc()
+	}
 	return actual.(fs.Fs), nil
 }
 

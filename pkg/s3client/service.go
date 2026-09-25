@@ -59,7 +59,7 @@ func New(ctx context.Context, conf *s3.StorageConfig, metricsSvc metrics.S3Servi
 		// speak and in the user they sign for, but they all talk to the same
 		// endpoint, and a pool per client would let one storage see a
 		// multiple of the connections the pool is sized for.
-		transport := newS3Transport()
+		transport := newS3Transport(storage)
 		for user := range clientConf.Credentials {
 			c, err := newClient(ctx, clientConf, storage, user, metricsSvc, tp, transport)
 			if err != nil {

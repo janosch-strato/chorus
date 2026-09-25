@@ -29,6 +29,7 @@ import (
 	"github.com/clyso/chorus/pkg/log"
 	"github.com/clyso/chorus/pkg/metrics"
 	"github.com/clyso/chorus/pkg/replication"
+	"github.com/clyso/chorus/pkg/s3client"
 	"github.com/clyso/chorus/pkg/util"
 )
 
@@ -52,9 +53,17 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 		routeDuration := time.Since(start)
 		if err != nil {
 			metrics.ProxyRequestInternalDuration(xctx.GetMethod(ctx).String(), storage, body.internalDuration())
+			// a storage that answers 404 or 503 answers with an error, and
+			// the request ends here rather than below: without counting it
+			// too, the status counter would only ever hold the successes
+			status := s3client.ResponseStatus(resp, err)
+			if status != 0 {
+				metrics.ProxyStorageStatus(storage, status)
+			}
 			timingFields(logger.Info().Err(err), timing).
 				Str(log.Storage, storage).
 				Dur("route_duration", routeDuration).
+				Int("status", status).
 				Msg("proxy: request failed")
 			util.WriteError(r.Context(), w, err)
 			return
@@ -88,6 +97,9 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 		}
 		internalDuration := body.internalDuration()
 		metrics.ProxyRequestInternalDuration(xctx.GetMethod(ctx).String(), storage, internalDuration)
+		// counted before the body is passed on, so that a storage answer is
+		// recorded even when the client gives up while it is being copied
+		metrics.ProxyStorageStatus(storage, resp.StatusCode)
 		w.WriteHeader(resp.StatusCode)
 		written, err := io.Copy(w, resp.Body)
 		if err != nil {
