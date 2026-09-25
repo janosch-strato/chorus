@@ -80,7 +80,7 @@ type Service interface {
 	GetReplicationPolicyInfoExtended(ctx context.Context, id entity.ReplicationStatusID) (entity.ReplicationStatusExtended, error)
 	ListReplicationPolicyInfo(ctx context.Context) (map[entity.ReplicationStatusID]entity.ReplicationStatusExtended, error)
 	IsReplicationPolicyExists(ctx context.Context, id entity.ReplicationStatusID) (bool, error)
-	ObjListStarted(ctx context.Context, id entity.ReplicationStatusID) error
+	ListingDone(ctx context.Context, id entity.ReplicationStatusID) error
 
 	PauseReplication(ctx context.Context, id entity.ReplicationStatusID) error
 	ResumeReplication(ctx context.Context, id entity.ReplicationStatusID) error
@@ -206,9 +206,9 @@ func (r *policySvc) buildQueueStats(ctx context.Context, queues []string) (bool,
 	return isPaused, result, nil
 }
 
-func (r *policySvc) ObjListStarted(ctx context.Context, id entity.ReplicationStatusID) error {
-	if err := r.replicationStatusStore.SetListingStarted(ctx, id); err != nil {
-		return fmt.Errorf("unable to set listing started: %w", err)
+func (r *policySvc) ListingDone(ctx context.Context, id entity.ReplicationStatusID) error {
+	if err := r.replicationStatusStore.SetListingDone(ctx, id); err != nil {
+		return fmt.Errorf("unable to set listing done: %w", err)
 	}
 	return nil
 }

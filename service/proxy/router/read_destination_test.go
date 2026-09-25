@@ -306,7 +306,7 @@ func Test_router_adjustObjReadRoute_reportsSwitchInProgress(t *testing.T) {
 	_, err := policySvc.AddBucketReplicationPolicy(ctx, replID, nil)
 	r.NoError(err)
 	queueSvc.InitReplicationInProgress(replID)
-	r.NoError(policySvc.ObjListStarted(ctx, replID))
+	r.NoError(policySvc.ListingDone(ctx, replID))
 	queueSvc.InitReplicationDone(replID)
 
 	rt := &router{policySvc: policySvc, versionSvc: meta.NewVersionService(c), queueSvc: queueSvc}

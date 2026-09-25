@@ -121,7 +121,7 @@ func (m *policyServiceMock) IsReplicationPolicyExists(context.Context, entity.Re
 	panic("not implemented")
 }
 
-func (m *policyServiceMock) ObjListStarted(context.Context, entity.ReplicationStatusID) error {
+func (m *policyServiceMock) ListingDone(context.Context, entity.ReplicationStatusID) error {
 	panic("not implemented")
 }
 

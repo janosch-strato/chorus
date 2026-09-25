@@ -153,8 +153,8 @@ func (s *svc) HandleMigrationBucketListObj(ctx context.Context, t *asynq.Task) e
 	}
 	_ = s.storageSvc.DelLastListedObj(ctx, p.FromStorage, p.ToStorage, p.Bucket, p.ToBucket)
 
-	if err = s.policySvc.ObjListStarted(ctx, replicationID); err != nil {
-		logger.Err(err).Msg("migration bucket list obj: unable to set ObjListStarted")
+	if err = s.policySvc.ListingDone(ctx, replicationID); err != nil {
+		logger.Err(err).Msg("migration bucket list obj: unable to set ListingDone")
 	}
 
 	logger.Info().Msg("migration bucket list obj: done")

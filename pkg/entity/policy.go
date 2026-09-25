@@ -75,7 +75,7 @@ type ReplicationStatus struct {
 
 	ArchivedAt *time.Time `redis:"archived_at,omitempty"`
 
-	ListingStarted bool `redis:"listing_started"`
+	ListingDone bool `redis:"listing_done"`
 
 	HasSwitch bool `redis:"-"`
 }
@@ -92,7 +92,7 @@ type ReplicationStatusExtended struct {
 }
 
 func (r *ReplicationStatusExtended) InitDone() bool {
-	return r.ListingStarted && r.InitMigration.Pending == 0
+	return r.ListingDone && r.InitMigration.Pending == 0
 }
 
 type QueueStats struct {

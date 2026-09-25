@@ -32,8 +32,8 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 
 			nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{
 				ReplicationStatus: &entity.ReplicationStatus{
-					CreatedAt:      hourAgo,
-					ListingStarted: true,
+					CreatedAt:   hourAgo,
+					ListingDone: true,
 				},
 				IsPaused: false,
 				InitMigration: entity.QueueStats{
@@ -60,8 +60,8 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 
 			nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{
 				ReplicationStatus: &entity.ReplicationStatus{
-					CreatedAt:      hourAgo,
-					ListingStarted: true,
+					CreatedAt:   hourAgo,
+					ListingDone: true,
 				},
 				IsPaused: false,
 				InitMigration: entity.QueueStats{
@@ -112,8 +112,8 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 
 			nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{
 				ReplicationStatus: &entity.ReplicationStatus{
-					CreatedAt:      hourAgo,
-					ListingStarted: true,
+					CreatedAt:   hourAgo,
+					ListingDone: true,
 				},
 				IsPaused: false,
 				InitMigration: entity.QueueStats{
@@ -140,8 +140,8 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 
 			nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{
 				ReplicationStatus: &entity.ReplicationStatus{
-					CreatedAt:      hourAgo,
-					ListingStarted: true,
+					CreatedAt:   hourAgo,
+					ListingDone: true,
 				},
 				IsPaused: false,
 				InitMigration: entity.QueueStats{
@@ -170,8 +170,8 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 
 			nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{
 				ReplicationStatus: &entity.ReplicationStatus{
-					CreatedAt:      hourAgo,
-					ListingStarted: true,
+					CreatedAt:   hourAgo,
+					ListingDone: true,
 				},
 				IsPaused: false,
 				InitMigration: entity.QueueStats{
@@ -207,8 +207,8 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 
 		nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{
 			ReplicationStatus: &entity.ReplicationStatus{
-				CreatedAt:      hourAgo,
-				ListingStarted: true,
+				CreatedAt:   hourAgo,
+				ListingDone: true,
 			},
 			IsPaused: false,
 			InitMigration: entity.QueueStats{
@@ -238,8 +238,8 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 
 		nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{
 			ReplicationStatus: &entity.ReplicationStatus{
-				CreatedAt:      hourAgo,
-				ListingStarted: true,
+				CreatedAt:   hourAgo,
+				ListingDone: true,
 			},
 			IsPaused: false,
 			InitMigration: entity.QueueStats{
@@ -272,8 +272,8 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 
 		nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{
 			ReplicationStatus: &entity.ReplicationStatus{
-				CreatedAt:      hourAgo,
-				ListingStarted: true,
+				CreatedAt:   hourAgo,
+				ListingDone: true,
 			},
 			IsPaused: false,
 			InitMigration: entity.QueueStats{
@@ -306,8 +306,8 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 
 		nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{
 			ReplicationStatus: &entity.ReplicationStatus{
-				CreatedAt:      hourAgo,
-				ListingStarted: true,
+				CreatedAt:   hourAgo,
+				ListingDone: true,
 			},
 			IsPaused: false,
 			InitMigration: entity.QueueStats{
@@ -340,8 +340,8 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 
 		nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{
 			ReplicationStatus: &entity.ReplicationStatus{
-				CreatedAt:      hourAgo,
-				ListingStarted: true,
+				CreatedAt:   hourAgo,
+				ListingDone: true,
 			},
 			IsPaused: false,
 			InitMigration: entity.QueueStats{
@@ -377,8 +377,8 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 
 		nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{
 			ReplicationStatus: &entity.ReplicationStatus{
-				CreatedAt:      hourAgo,
-				ListingStarted: true,
+				CreatedAt:   hourAgo,
+				ListingDone: true,
 			},
 			IsPaused: false,
 			InitMigration: entity.QueueStats{
@@ -412,8 +412,8 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 
 		nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{
 			ReplicationStatus: &entity.ReplicationStatus{
-				CreatedAt:      hourAgo,
-				ListingStarted: true,
+				CreatedAt:   hourAgo,
+				ListingDone: true,
 			},
 			IsPaused: false,
 			InitMigration: entity.QueueStats{
@@ -445,8 +445,8 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 
 		nextState, err := worker.processSwitchWithDowntimeState(ctx, id, entity.ReplicationStatusExtended{
 			ReplicationStatus: &entity.ReplicationStatus{
-				CreatedAt:      hourAgo,
-				ListingStarted: true,
+				CreatedAt:   hourAgo,
+				ListingDone: true,
 			},
 			IsPaused: false,
 			InitMigration: entity.QueueStats{

@@ -202,12 +202,12 @@ func (r *ReplicationStatusStore) WithExecutor(exec Executor[redis.Pipeliner]) *R
 	return NewReplicationStatusStore(exec.Get())
 }
 
-func (r *ReplicationStatusStore) SetListingStartedOp(ctx context.Context, id entity.ReplicationStatusID) OperationStatus {
-	return r.SetFieldIfExistsOp(ctx, id, "listing_started", true)
+func (r *ReplicationStatusStore) SetListingDoneOp(ctx context.Context, id entity.ReplicationStatusID) OperationStatus {
+	return r.SetFieldIfExistsOp(ctx, id, "listing_done", true)
 }
 
-func (r *ReplicationStatusStore) SetListingStarted(ctx context.Context, id entity.ReplicationStatusID) error {
-	return r.SetListingStartedOp(ctx, id).Get()
+func (r *ReplicationStatusStore) SetListingDone(ctx context.Context, id entity.ReplicationStatusID) error {
+	return r.SetListingDoneOp(ctx, id).Get()
 }
 
 func (r *ReplicationStatusStore) SetCreatedAtOp(ctx context.Context, id entity.ReplicationStatusID, value time.Time) OperationStatus {
