@@ -42,7 +42,13 @@ var requestDuration = promauto.NewHistogramVec(
 type ReqStatus string
 
 const (
-	StatusOK         ReqStatus = "ok"
+	StatusOK ReqStatus = "ok"
+	// StatusRedirect is a storage pointing the request elsewhere, which
+	// chorus does not follow: a 301 for a bucket in another region, a 307
+	// while one is being created. The storage answered, but the request did
+	// not get what it asked for, so it is neither a success nor a fault of
+	// the storage.
+	StatusRedirect   ReqStatus = "redirect"
 	StatusClientErr  ReqStatus = "client_error"
 	StatusServerErr  ReqStatus = "server_error"
 	StatusNetworkErr ReqStatus = "network_error"

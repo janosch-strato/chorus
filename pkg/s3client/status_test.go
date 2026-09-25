@@ -48,8 +48,15 @@ func Test_s3RequestStatus(t *testing.T) {
 			// not in the set of statuses chorus treats as success, so it
 			// arrives here as an error, but the storage did answer
 			name: "answered 304", resp: &http.Response{StatusCode: 304},
-			err: apiError(304), want: metrics.StatusOK,
+			err: apiError(304), want: metrics.StatusRedirect,
 		},
+		{
+			// the bucket lives in another region, which is a misconfigured
+			// storage rather than a request that worked
+			name: "answered 301", resp: &http.Response{StatusCode: 301},
+			err: apiError(301), want: metrics.StatusRedirect,
+		},
+		{name: "answered 299", resp: &http.Response{StatusCode: 299}, err: apiError(299), want: metrics.StatusOK},
 		{name: "answered 201", resp: &http.Response{StatusCode: 201}, err: apiError(201), want: metrics.StatusOK},
 		{name: "answered 404", resp: &http.Response{StatusCode: 404}, err: apiError(404), want: metrics.StatusClientErr},
 		{name: "answered 503", resp: &http.Response{StatusCode: 503}, err: apiError(503), want: metrics.StatusServerErr},

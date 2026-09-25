@@ -361,14 +361,16 @@ func (c *client) IsOnline() bool {
 func s3RequestStatus(resp *http.Response, err error) metrics.ReqStatus {
 	// A status the storage gave, whether it came back as a response or as
 	// the api error a non-success status is turned into. Anything below 400
-	// is an answer, the redirects and the odd 201 included; only the absence
-	// of one says something about the storage or about us.
+	// is an answer, the odd 201 included; only the absence of one says
+	// something about the storage or about us.
 	code := ResponseStatus(resp, err)
 	switch {
 	case code >= 500:
 		return metrics.StatusServerErr
 	case code >= 400:
 		return metrics.StatusClientErr
+	case code >= 300:
+		return metrics.StatusRedirect
 	case code > 0:
 		return metrics.StatusOK
 	case err == nil:
