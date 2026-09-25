@@ -150,6 +150,11 @@ func (s *svc) HandleMigrationBucketListObj(ctx context.Context, t *asynq.Task) e
 	if err = s.policySvc.ListingDone(ctx, replicationID); err != nil {
 		logger.Err(err).Msg("migration bucket list obj: unable to set ListingDone")
 	}
+	// the copy queue may already be empty by now: nothing else will recheck it,
+	// since the copy that empties it can run before this point sets ListingDone
+	if err = s.endInitialSync(ctx, replicationID); err != nil {
+		logger.Err(err).Msg("migration bucket list obj: unable to end initial sync")
+	}
 
 	logger.Info().Msg("migration bucket list obj: done")
 	return nil

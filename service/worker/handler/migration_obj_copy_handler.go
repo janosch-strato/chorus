@@ -168,13 +168,16 @@ func (s *svc) HandleMigrationObjCopy(ctx context.Context, t *asynq.Task) (err er
 	return nil
 }
 
-// endInitialSync ends the initial sync of the migration if the listing is
-// done and this copy was the last one waiting for it. From then on the
-// destination holds everything the listing found, so the proxy reads it from
-// there without asking for the per object records, and the records go.
+// endInitialSync ends the initial sync of the migration once the listing is
+// done and the copy queue is empty. From then on the destination holds
+// everything the listing found, so the proxy reads it from there without
+// asking for the per object records, and the records go.
 //
-// The listing check matters because the copy queue can run empty while the
-// listing is still filling it.
+// It is called both by the copy that empties the queue and by the listing
+// once it finishes: whichever of the two happens last is the one that finds
+// both conditions true and actually ends the sync, so the outcome does not
+// depend on their order. Calling it twice is harmless, since both actions it
+// takes are idempotent.
 //
 // Copies still running are not waited for. A read of one of those objects
 // finds it missing on the destination and falls back to the source, which is
