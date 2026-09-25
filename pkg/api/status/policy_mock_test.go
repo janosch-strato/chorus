@@ -133,7 +133,7 @@ func (m *policyServiceMock) ResumeReplication(context.Context, entity.Replicatio
 	panic("not implemented")
 }
 
-func (m *policyServiceMock) DeleteReplication(context.Context, entity.ReplicationStatusID) error {
+func (m *policyServiceMock) DropReplicationRecords(context.Context, entity.ReplicationStatusID) error {
 	panic("not implemented")
 }
 

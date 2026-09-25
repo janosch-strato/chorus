@@ -506,7 +506,7 @@ func Test_policySvc_BucketReplicationPolicies(t *testing.T) {
 		r.NoError(err)
 		r.True(pol.ListingDone)
 
-		err = svc.DeleteReplication(ctx, replicationIDu1s1s2)
+		err = svc.DropReplicationRecords(ctx, replicationIDu1s1s2)
 		r.NoError(err)
 		_, err = svc.GetReplicationPolicyInfo(ctx, replicationIDu1s1s2)
 		r.ErrorIs(err, dom.ErrNotFound)
@@ -777,7 +777,7 @@ func Test_CustomDestBucket(t *testing.T) {
 	r.False(info.CreatedAt.IsZero())
 
 	// delete replication
-	err = svc.DeleteReplication(ctx, replicationIDDifferentBuckets)
+	err = svc.DropReplicationRecords(ctx, replicationIDDifferentBuckets)
 	r.NoError(err)
 
 	// verify deletion

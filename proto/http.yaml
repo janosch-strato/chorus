@@ -39,9 +39,6 @@ http:
     - selector: chorus.Chorus.ResumeReplication
       put: /replication/resume
       body: "*"
-    - selector: chorus.Chorus.DeleteReplication
-      put: /replication/delete
-      body: "*"
     - selector: chorus.Chorus.DeleteUserReplication
       put: /replication/user/delete
       body: "*"

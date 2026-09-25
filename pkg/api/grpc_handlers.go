@@ -677,53 +677,6 @@ func (h *handlers) ResumeReplication(ctx context.Context, req *pb.ReplicationReq
 	return &emptypb.Empty{}, nil
 }
 
-func (h *handlers) DeleteReplication(ctx context.Context, req *pb.ReplicationRequest) (*emptypb.Empty, error) {
-	ctx = log.WithUser(ctx, req.User)
-	lock, err := h.userLocker.Lock(ctx, req.User, store.WithDuration(time.Second), store.WithRetry(true))
-	if err != nil {
-		return nil, err
-	}
-	defer lock.Release(ctx)
-	err = lock.Do(ctx, time.Second, func() error {
-		replicationID := entity.ReplicationStatusID{
-			User:        req.User,
-			FromStorage: req.From,
-			FromBucket:  req.Bucket,
-			ToStorage:   req.To,
-			ToBucket:    req.ToBucket,
-		}
-		err = h.policySvc.DeleteReplication(ctx, replicationID)
-		if err != nil {
-			return fmt.Errorf("%w: unable to delete replication policy", err)
-		}
-		err = h.versionSvc.DeleteBucketMeta(ctx, meta.ToDest(req.To, req.ToBucket), req.Bucket)
-		if err != nil {
-			return fmt.Errorf("%w: unable to delete version metadata", err)
-		}
-		err = h.storageSvc.DelLastListedObj(ctx, req.From, req.To, req.Bucket, req.ToBucket)
-		if err != nil {
-			return fmt.Errorf("%w: unable to delete list obj metadata", err)
-		}
-		err = h.storageSvc.DelAllMigratedObjs(ctx, replicationID)
-		if err != nil {
-			return fmt.Errorf("%w: unable to delete migrated object records", err)
-		}
-		err = h.storageSvc.DelAllPendingDeleteObjs(ctx, replicationID)
-		if err != nil {
-			return fmt.Errorf("%w: unable to delete pending delete records", err)
-		}
-		err = h.notificationSvc.DeleteBucketNotification(ctx, req.From, req.User, req.Bucket)
-		if err != nil {
-			zerolog.Ctx(ctx).Err(err).Msg("unable to delete agent bucket notification")
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &emptypb.Empty{}, nil
-}
-
 func (h *handlers) CompareBucket(ctx context.Context, req *pb.CompareBucketRequest) (*pb.CompareBucketResponse, error) {
 	if _, ok := h.storages.Storages[req.From]; !ok {
 		return nil, fmt.Errorf("%w: invalid FromStorage", dom.ErrInvalidArg)
@@ -911,7 +864,7 @@ func (h *handlers) createAgentBucketNotification(ctx context.Context, replicatio
 	// create a topic and bucket notification for agent event source.
 	err := h.notificationSvc.SubscribeToBucketNotifications(ctx, replicationID.FromStorage, replicationID.User, replicationID.FromBucket, *agentURL)
 	if err != nil {
-		cleanupErr := h.policySvc.DeleteReplication(context.Background(), replicationID)
+		cleanupErr := h.policySvc.DropReplicationRecords(context.Background(), replicationID)
 		if cleanupErr != nil {
 			zerolog.Ctx(ctx).Err(cleanupErr).Msgf("unable to cleanup replication policy for bucket %s", replicationID.FromBucket)
 		}
