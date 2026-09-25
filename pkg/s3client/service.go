@@ -93,9 +93,7 @@ func (s *svc) getClient(ctx context.Context, storage string) (Client, error) {
 		return nil, fmt.Errorf("%w: storage %q, user %q not exists", dom.ErrInvalidStorageConfig, storage, user)
 	}
 
-	if !c.IsOnline() {
-		zerolog.Ctx(ctx).Warn().Str(log.Storage, storage).Msg("storage is offline")
-	}
+	// Whether it is online is logged by GetByName, the only caller.
 	return c, nil
 }
 
