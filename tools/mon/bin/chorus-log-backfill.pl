@@ -149,6 +149,12 @@ my $WINDOW = $opt{'lag-window'} > $STEP ? $opt{'lag-window'} : $STEP;
 my $DROP = GraphitePath::drop_set($opt{'drop-labels'});
 my $LIMIT = $opt{count};
 
+# What the reader fills and the sections below it read: the oldest interval
+# still open, and the counters the progress line and the summary report.
+my $NEXT_BUCKET;
+my $READ_BYTES = 0;
+my %STATS;
+
 # --- where the datapoints go ------------------------------------------------
 
 my $CARBON;
@@ -207,8 +213,8 @@ sub progress_step {
 	return if $now - $progress_last < 1.0;
 	$progress_last = $now;
 	my $line = sprintf '%.2f GB  proxy %d  copies %d  points %d',
-		$main::READ_BYTES / 1e9, $main::STATS{proxy} || 0,
-		$main::STATS{copies} || 0, $WRITTEN;
+		$READ_BYTES / 1e9, $STATS{proxy} || 0,
+		$STATS{copies} || 0, $WRITTEN;
 	printf STDERR "\r%-*s", $progress_width, $line;
 	$progress_width = length $line if length $line > $progress_width;
 }
@@ -260,7 +266,7 @@ sub boundary {
 sub span {
 	my ($began, $ended, $metric, $labels, $weight) = @_;
 	$weight = 1 if !defined $weight;
-	my $floor = defined $main::NEXT_BUCKET ? $main::NEXT_BUCKET : 0;
+	my $floor = defined $NEXT_BUCKET ? $NEXT_BUCKET : 0;
 	my $path = path_of($metric, $labels);
 	$span_value{$path} = 0 if !exists $span_value{$path};
 	my $first = boundary($began);
@@ -345,9 +351,6 @@ sub backlog_record {
 
 # --- reading the logs -------------------------------------------------------
 
-our $NEXT_BUCKET;
-our $READ_BYTES = 0;
-our %STATS;
 my %running;
 my %backoff;
 
