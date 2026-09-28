@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -277,3 +278,75 @@ func TestACustomerReadingItAllKeepsOneStorageConnection(t *testing.T) {
 // A deferred call runs before every cleanup, a failed assertion included, so
 // a test that finds the read still held ends saying so instead of hanging on
 // it.
+func newStallingStorage(t *testing.T, size int) (storage *httptest.Server, stalled chan struct{}, release func()) {
+	t.Helper()
+	const head = 8 << 10
+
+	letGo := make(chan struct{})
+	stalled = make(chan struct{}, 1)
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("location") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(size))
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write(make([]byte, head)); err != nil {
+			return
+		}
+		w.(http.Flusher).Flush()
+		stalled <- struct{}{}
+		<-letGo
+	}))
+	srv.Start()
+	t.Cleanup(srv.Close)
+	return srv, stalled, sync.OnceFunc(func() { close(letGo) })
+}
+
+// disconnectOnceForwarded asks for an object, reads what the proxy managed to
+// forward, and only then drops the connection. By that point the proxy has
+// written all it had and is waiting on the storage, so its next move is a
+// read and not a write, and the reset below goes unnoticed.
+func disconnectOnceForwarded(t *testing.T, proxyURL string, forwarded int) {
+	t.Helper()
+	r := require.New(t)
+	address := strings.TrimPrefix(proxyURL, "http://")
+
+	conn, err := net.Dial("tcp", address)
+	r.NoError(err)
+	defer conn.Close()
+	r.NoError(conn.(*net.TCPConn).SetLinger(0))
+
+	_, err = fmt.Fprintf(conn, "GET /%s/obj HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
+		testBucket, address)
+	r.NoError(err)
+
+	r.NoError(conn.SetReadDeadline(time.Now().Add(30 * time.Second)))
+	for read := 0; read < forwarded; {
+		n, err := conn.Read(make([]byte, 4<<10))
+		r.NoError(err)
+		read += n
+	}
+}
+
+// A storage that stops mid answer holds a read that nothing else will end:
+// the customer leaving is not noticed, because nothing is written to it to
+// fail, and from the first byte the read no longer follows its context.
+func TestAStorageThatStopsDoesNotHoldAReadNobodyWaitsFor(t *testing.T) {
+	storage, stalled, release := newStallingStorage(t, abandonedAnswer)
+	defer release()
+	proxy, closed := newProxyOver(t, storage)
+
+	disconnectOnceForwarded(t, proxy.URL, 8<<10)
+	select {
+	case <-stalled:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the storage never got as far as stopping")
+	}
+
+	select {
+	case <-closed:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the read outlived the customer it was for, with no end in sight")
+	}
+}

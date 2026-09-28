@@ -69,11 +69,11 @@ func (t measuredTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	return resp, err
 }
 
-// newS3Transport mirrors http.DefaultTransport apart from the idle
-// connection pool, which is sized for high-concurrency workers. One is made
-// per storage, see New(). The dialer is wrapped so opened/closed/open
-// connections to this storage are tracked under the "http" connection layer.
-func newS3Transport(storage string) *http.Transport {
+// http.DefaultTransport apart from the idle pool, sized for high-concurrency
+// workers, and answerStart, which is unbounded when zero. One per storage, see
+// New(). The dialer is wrapped so opened/closed/open connections to this
+// storage are tracked under the "http" connection layer.
+func newS3Transport(storage string, answerStart time.Duration) *http.Transport {
 	baseDial := (&net.Dialer{
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,
@@ -87,6 +87,7 @@ func newS3Transport(storage string) *http.Transport {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: answerStart,
 	}
 }
 

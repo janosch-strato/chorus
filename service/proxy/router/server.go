@@ -116,6 +116,7 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 			w.Header().Set(k, v[0])
 		}
 		w.WriteHeader(resp.StatusCode)
+		defer abortIfStuckAfterClientGone(r.Context(), resp)()
 		written, err := io.Copy(w, resp.Body)
 		if err != nil {
 			// The status is out, so there is no telling the client.
@@ -138,6 +139,40 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 			Dur("repl_enqueue_duration", enqueueDuration).
 			Msg("proxy: request done")
 	})
+}
+
+// How long an answer is given to move after the client it was for has gone.
+// The same order as the drain's own budget: long enough for a copy that is
+// still getting somewhere, short enough not to hold a request on a storage
+// that has stopped.
+const clientGoneBudget = 2 * time.Second
+
+// A storage that goes quiet mid answer leaves the copy above blocked on a
+// read, and there the client leaving is never noticed: nothing is written to
+// it to fail. From the first byte the read no longer follows the context it
+// was made on either, see cancelUntilAnswered. So the client going starts a
+// clock, and an answer that still has not moved when it runs out is given up
+// on.
+//
+// The wait is what keeps an answer that is still arriving: there the copy's
+// next write fails by itself, and closing the body reads out the rest, so the
+// connection is kept. Only one that has stopped reaches the end of the clock,
+// and that one has no connection worth keeping.
+//
+// The returned func ends the watch. A callback already under way when it is
+// called may still abort, which costs nothing: an answer that has been closed
+// has no request left to end.
+func abortIfStuckAfterClientGone(ctx context.Context, resp *http.Response) func() {
+	var giveUp atomic.Pointer[time.Timer]
+	stopWatching := context.AfterFunc(ctx, func() {
+		giveUp.Store(time.AfterFunc(clientGoneBudget, func() { s3client.AbortResponse(resp) }))
+	})
+	return func() {
+		stopWatching()
+		if timer := giveUp.Load(); timer != nil {
+			timer.Stop()
+		}
+	}
 }
 
 // On a context of its own: the change is on the storage, so recording it must

@@ -19,6 +19,7 @@ package s3client
 import (
 	"context"
 	"io"
+	"net/http"
 	"sync/atomic"
 	"time"
 )
@@ -94,4 +95,22 @@ func (b *drainingBody) Abort() {
 // reached.
 type Abortable interface {
 	Abort()
+}
+
+// AbortResponse gives up on an answer nobody is waiting for any more, so that
+// a reader the storage has left hanging is let go: from the first byte a read
+// no longer follows the context it was made on, see cancelUntilAnswered, and
+// ending the request is what is left. Closing the body reaches the same place
+// but only through the drain, which is itself a read of the answer that
+// stopped.
+//
+// An answer with nothing to give up on - one already read into memory, an api
+// error's among them - is left alone.
+func AbortResponse(resp *http.Response) {
+	if resp == nil {
+		return
+	}
+	if body, ok := resp.Body.(Abortable); ok {
+		body.Abort()
+	}
 }

@@ -28,8 +28,8 @@ import (
 )
 
 const (
-	defaultHealthCheckInterval = time.Second * 5
-	defaultHttpTimeout         = time.Minute * 5
+	defaultHealthCheckInterval   = time.Second * 5
+	defaultResponseHeaderTimeout = time.Minute * 2
 )
 
 type StorageConfig struct {
@@ -59,9 +59,17 @@ type Storage struct {
 	Provider            string                   `yaml:"provider"`
 	IsMain              bool                     `yaml:"isMain"`
 	HealthCheckInterval time.Duration            `yaml:"healthCheckInterval"`
-	HttpTimeout         time.Duration            `yaml:"httpTimeout"`
-	IsSecure            bool                     `yaml:"isSecure"`
-	DefaultRegion       string                   `yaml:"defaultRegion"`
+	// How long a single request may take, sending the body included. Unset
+	// means no limit: an object has no size limit either, so a figure guessed
+	// too low fails uploads that were never too large.
+	HttpTimeout time.Duration `yaml:"httpTimeout"`
+	// How long the storage may say nothing after being sent a request in full.
+	// Sending and receiving fall outside it, so no object is too large for it.
+	// Unset means two minutes; negative means no limit.
+	ResponseHeaderTimeout time.Duration `yaml:"responseHeaderTimeout"`
+
+	IsSecure      bool   `yaml:"isSecure"`
+	DefaultRegion string `yaml:"defaultRegion"`
 
 	RateLimit RateLimit `yaml:"rateLimit"`
 
@@ -163,8 +171,11 @@ func (s *StorageConfig) Init() error {
 		if storage.HealthCheckInterval == 0 {
 			storage.HealthCheckInterval = defaultHealthCheckInterval
 		}
-		if storage.HttpTimeout == 0 {
-			storage.HttpTimeout = defaultHttpTimeout
+		// Negative stays negative: rewriting it into the transport's zero would
+		// have a second Init, as standalone mode runs on its copies, take that
+		// zero for unset.
+		if storage.ResponseHeaderTimeout == 0 {
+			storage.ResponseHeaderTimeout = defaultResponseHeaderTimeout
 		}
 		if storage.Provider == "" {
 			return fmt.Errorf("app config: storage provider required")
