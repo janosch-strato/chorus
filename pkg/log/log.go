@@ -108,12 +108,20 @@ func getFileWriter(path string) (*os.File, error) {
 	return f, nil
 }
 
+// defaultOnce keeps the process-wide logger below to a single write.
+var defaultOnce sync.Once
+
 func GetLogger(cfg *Config, app, appID string) (zerolog.Logger, error) {
 	logger, err := CreateLogger(cfg, app, appID)
 	if err != nil {
 		return zerolog.Logger{}, err
 	}
-	zerolog.DefaultContextLogger = &logger
+	// zerolog's own package variable, read by whatever logs through a context
+	// - the asynq adapter above among it, from the worker's goroutines. In
+	// standalone mode worker and proxy both come up while that is going on, so
+	// it is written once, by whoever is first. That is standalone itself, and
+	// its config is the one both are built from.
+	defaultOnce.Do(func() { zerolog.DefaultContextLogger = &logger })
 	return logger, nil
 }
 
