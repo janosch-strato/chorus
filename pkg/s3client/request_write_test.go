@@ -9,6 +9,7 @@ import (
 	"net/http/httptrace"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -426,6 +427,69 @@ func TestClassify(t *testing.T) {
 			r.True(errors.Is(err, dom.ErrStorageAnswerLost) || errors.Is(err, dom.ErrClientGone),
 				"neither outcome was reached: %v", err)
 		}
+	})
+}
+
+// A client context that counts what is watching it. Hiding its values keeps the
+// context package from recognising the cancelable context underneath, which it
+// would register on directly instead of asking this one.
+type watchedCtx struct {
+	context.Context
+	watching atomic.Int32
+}
+
+func (c *watchedCtx) Value(any) any { return nil }
+
+func newWatchedCtx(t *testing.T) *watchedCtx {
+	parent, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return &watchedCtx{Context: parent}
+}
+
+func (c *watchedCtx) AfterFunc(f func()) func() bool {
+	c.watching.Add(1)
+	stop := context.AfterFunc(c.Context, f)
+	return func() bool {
+		if stop() {
+			c.watching.Add(-1)
+			return true
+		}
+		return false
+	}
+}
+
+func TestCancelLetsGoOfTheClient(t *testing.T) {
+	t.Run("A read that failed before its answer stops watching", func(t *testing.T) {
+		r := require.New(t)
+
+		clientCtx := newWatchedCtx(t)
+		_, cancel := cancelUntilAnswered(clientCtx)
+		r.EqualValues(1, clientCtx.watching.Load())
+
+		cancel()
+		r.Zero(clientCtx.watching.Load())
+	})
+
+	t.Run("So does a write", func(t *testing.T) {
+		r := require.New(t)
+
+		clientCtx := newWatchedCtx(t)
+		_, cancel, _ := cancelUntilWritten(clientCtx, true)
+
+		cancel()
+		r.Zero(clientCtx.watching.Load())
+	})
+
+	t.Run("Cancelling after the answer began is harmless", func(t *testing.T) {
+		r := require.New(t)
+
+		clientCtx := newWatchedCtx(t)
+		reqCtx, cancel := cancelUntilAnswered(clientCtx)
+		httptrace.ContextClientTrace(reqCtx).GotFirstResponseByte()
+
+		cancel()
+		cancel()
+		r.Zero(clientCtx.watching.Load())
 	})
 }
 
