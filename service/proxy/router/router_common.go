@@ -57,11 +57,18 @@ func (r *router) commonRead(req *http.Request) (resp *http.Response, storage str
 		if err == nil && !isApiErr {
 			return resp, destStorage, false, nil
 		}
-		zerolog.Ctx(ctx).Info().Err(err).Str("destination_storage", destStorage).
-			Msg("read from destination failed, falling back to source storage")
 		if resp != nil {
 			_ = resp.Body.Close()
 		}
+		// The destination did not fail, the client left, and reading from the
+		// source would only repeat what is already over.
+		if errors.Is(ctx.Err(), context.Canceled) {
+			zerolog.Ctx(ctx).Info().Err(err).Str("destination_storage", destStorage).
+				Msg("read from destination given up with the client")
+			return nil, destStorage, false, fmt.Errorf("%w: read from destination", dom.ErrClientGone)
+		}
+		zerolog.Ctx(ctx).Info().Err(err).Str("destination_storage", destStorage).
+			Msg("read from destination failed, falling back to source storage")
 		metrics.ProxyDestinationReadFallback(destStorage)
 		// resp, isApiErr and err are overwritten by the source read below
 	}

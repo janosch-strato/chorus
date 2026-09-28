@@ -52,9 +52,8 @@ const (
 	s3MaxIdleConnsPerHost = 256
 )
 
-// measuredTransport records how long a storage takes to answer the requests
-// the s3 sdk clients make. Those do not go through client.Do, so without this
-// the acl, tag and stat calls of the worker are invisible.
+// The sdk clients do not go through client.Do, so without this the acl, tag and
+// stat calls of the worker are unmeasured.
 type measuredTransport struct {
 	next    http.RoundTripper
 	storage string
@@ -93,12 +92,9 @@ func newS3Transport(storage string) *http.Transport {
 
 func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsSvc metrics.S3Service, _ trace.TracerProvider, transport *http.Transport) (Client, error) {
 	c := &client{
-		// Without a transport this would use http.DefaultTransport, which
-		// keeps 2 idle connections per host, so every request beyond two in
-		// flight pays a fresh tcp and tls handshake. It is also shared
-		// process wide, which lets an InsecureSkipVerify set for one purpose
-		// reach every other user of the default transport. This one is
-		// measured by client.Do itself, which knows the s3 method.
+		// Not http.DefaultTransport: it keeps 2 idle connections per host and
+		// is shared process wide, which would let an InsecureSkipVerify set
+		// for one storage reach every other user of it.
 		c: &http.Client{
 			Timeout:   conf.HttpTimeout,
 			Transport: transport,
@@ -304,19 +300,29 @@ func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err 
 		signReqSpan.End()
 	}
 
-	// Report connection level timings into the request timing collector, if
-	// the caller collects them. The outgoing request keeps a background
-	// context on purpose: attaching the client context would make a client
-	// disconnect cancel the storage request, which it does not today.
-	timing := xctx.GetTiming(ctx)
-	if timing != nil {
-		newReq = newReq.WithContext(xctx.TraceContext(context.Background(), timing))
+	// A request follows its client so that neither storage nor connection is
+	// worked for an answer nobody waits for any more. Safe because an answered
+	// request's body is read within the proxy handler.
+	var (
+		base  context.Context
+		write *requestWrite
+	)
+	if isReadOnly(xctx.GetMethod(ctx)) {
+		// Only until the answer starts: from there the connection is worth
+		// more than the rest of a body nobody wants.
+		base, _ = cancelUntilAnswered(ctx)
+	} else {
+		// A write cannot be taken back once it is out.
+		base, _, write = cancelUntilWritten(ctx, newReq.ContentLength != 0)
 	}
+	timing := xctx.GetTiming(ctx)
+	newReq = newReq.WithContext(xctx.TraceContext(base, timing))
 
 	inFlight := metrics.StorageInFlight(c.name, xctx.GetMethod(ctx).String())
 	inFlight.Inc()
 	_, doReqSpan := otel.Tracer("").Start(ctx, fmt.Sprintf("clientDo.%s.DoReq", xctx.GetMethod(req.Context()).String()))
 	resp, err = c.c.Do(newReq)
+	err = write.classify(err)
 	doReqSpan.End()
 	inFlight.Dec()
 	if resp != nil {
@@ -346,6 +352,30 @@ func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err 
 		return nil, false, err
 	}
 	return
+}
+
+func isReadOnly(m s3.Method) bool {
+	switch m {
+	case s3.HeadBucket, s3.ListBuckets, s3.GetBucketLocation, s3.GetBucketTagging,
+		s3.GetBucketLifecycle, s3.GetBucketPolicy, s3.GetBucketPolicyStatus,
+		s3.GetBucketAcl, s3.GetBucketVersioning, s3.GetBucketWebsite,
+		s3.GetBucketReplication, s3.GetBucketNotification, s3.GetBucketEncryption,
+		s3.GetBucketRequestPayment, s3.GetBucketMetricsConfiguration,
+		s3.ListBucketMetricsConfiguration, s3.GetBucketAnalyticsConfiguration,
+		s3.ListBucketAnalyticsConfiguration,
+		s3.GetBucketIntelligentTieringConfiguration,
+		s3.ListBucketIntelligentTieringConfiguration,
+		s3.GetBucketInventoryConfiguration, s3.ListBucketInventoryConfiguration,
+		s3.GetBucketAccelerateConfiguration, s3.GetBucketLogging,
+		s3.GetBucketOwnershipControls, s3.GetBucketCors, s3.GetObject, s3.HeadObject,
+		s3.ListObjects, s3.ListObjectsV2, s3.GetObjectAttributes,
+		s3.ListObjectVersions, s3.SelectObjectContent, s3.ListMultipartUploads,
+		s3.ListParts, s3.GetObjectTagging, s3.GetObjectAcl, s3.GetPublicAccessBlock,
+		s3.GetObjectRetention, s3.GetObjectLegalHold, s3.GetObjectLockConfiguration,
+		s3.GetObjectTorrent:
+		return true
+	}
+	return false
 }
 
 func (c *client) IsOnline() bool {

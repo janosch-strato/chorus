@@ -38,10 +38,10 @@ type routeResult struct {
 	err      error
 }
 
-type fakeRouter struct{ result routeResult }
-
-func (f fakeRouter) Route(*http.Request) (*http.Response, []tasks.SyncTask, string, bool, error) {
-	return f.result.resp, nil, f.result.storage, f.result.isApiErr, f.result.err
+func routeTo(result routeResult) fakeRouter {
+	return fakeRouter{route: func(*http.Request) (*http.Response, []tasks.SyncTask, string, bool, error) {
+		return result.resp, nil, result.storage, result.isApiErr, result.err
+	}}
 }
 
 // statusCount returns what proxy_storage_status_total holds for one storage
@@ -75,11 +75,11 @@ func statusCount(t *testing.T, storage, status string) float64 {
 // storage answers 503 to everything.
 func Test_proxyStorageStatusCountsErrors(t *testing.T) {
 	before503 := statusCount(t, "source", "503")
-	handler := Serve(fakeRouter{routeResult{
+	handler := Serve(routeTo(routeResult{
 		storage:  "source",
 		isApiErr: true,
 		err:      mclient.ErrorResponse{StatusCode: 503, Code: "SlowDown"},
-	}}, nil)
+	}), nil)
 
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/bucket/object", strings.NewReader("")))
@@ -92,10 +92,10 @@ func Test_proxyStorageStatusCountsErrors(t *testing.T) {
 // never got a storage answer has no status to count, and must not invent one.
 func Test_proxyStorageStatusIgnoresNonAnswers(t *testing.T) {
 	before := statusCount(t, "source", "0")
-	handler := Serve(fakeRouter{routeResult{
+	handler := Serve(routeTo(routeResult{
 		storage: "source",
 		err:     context.Canceled,
-	}}, nil)
+	}), nil)
 
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/bucket/object", strings.NewReader("")))

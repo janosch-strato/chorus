@@ -17,6 +17,7 @@
 package router
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -59,7 +60,9 @@ func (r *router) createMultipartUpload(req *http.Request) (resp *http.Response, 
 		zerolog.Ctx(ctx).Err(err).Msg("unable to unmarshal initiateMultipartUploadResult response body")
 		return
 	}
-	err = r.storageSvc.StoreUploadID(ctx, user, bucket, object, respBody.UploadID, replSwitch.MultipartTTL)
+	// On a context of its own: the upload id is in the answer and nowhere else.
+	storeCtx := context.WithoutCancel(ctx)
+	err = r.storageSvc.StoreUploadID(storeCtx, user, bucket, object, respBody.UploadID, replSwitch.MultipartTTL)
 
 	return
 }
@@ -78,26 +81,29 @@ func (r *router) completeMultipartUpload(req *http.Request) (resp *http.Response
 		return nil, nil, "", false, err
 	}
 	resp, isApiErr, err = client.Do(req)
-	if err != nil || isApiErr {
+	if isApiErr || !dom.StorageMayHaveActed(err) {
 		return
 	}
+	// The upload completes whether or not the client stayed for the answer,
+	// see cancelUntilWritten.
+	doneCtx := context.WithoutCancel(ctx)
 	if switchInProgress {
-		_ = r.storageSvc.DeleteUploadID(ctx, user, bucket, object, req.URL.Query().Get("uploadId"))
+		_ = r.storageSvc.DeleteUploadID(doneCtx, user, bucket, object, req.URL.Query().Get("uploadId"))
 	}
 
-	var res completeMultipartUploadResult
-	xmlErr := s3client.ExtractRespBody(resp, &res)
-	if xmlErr != nil {
-		zerolog.Ctx(ctx).Err(xmlErr).Msg("unable to unmarshal response body")
-	} else {
-		zerolog.Ctx(ctx).Info().Str("etag", res.ETag).Msg("multipart uploaded object with etag")
+	if resp != nil {
+		var res completeMultipartUploadResult
+		if xmlErr := s3client.ExtractRespBody(resp, &res); xmlErr != nil {
+			zerolog.Ctx(ctx).Err(xmlErr).Msg("unable to unmarshal response body")
+		} else {
+			zerolog.Ctx(ctx).Info().Str("etag", res.ETag).Msg("multipart uploaded object with etag")
+		}
 	}
 
 	var objSize int64
-	objInfo, err := client.S3().StatObject(ctx, bucket, object, mclient.StatObjectOptions{})
-	if err != nil {
-		zerolog.Ctx(ctx).Err(err).Msg("unable to get uploaded object size")
-		err = nil
+	objInfo, statErr := client.S3().StatObject(doneCtx, bucket, object, mclient.StatObjectOptions{})
+	if statErr != nil {
+		zerolog.Ctx(ctx).Err(statErr).Msg("unable to get uploaded object size")
 	} else {
 		objSize = objInfo.Size
 	}
@@ -135,11 +141,12 @@ func (r *router) abortMultipartUpload(req *http.Request) (resp *http.Response, s
 		return nil, "", false, err
 	}
 	resp, isApiErr, err = client.Do(req)
-	if err != nil || isApiErr {
+	if isApiErr || !dom.StorageMayHaveActed(err) {
 		return
 	}
 	if switchInProgress {
-		_ = r.storageSvc.DeleteUploadID(ctx, user, bucket, object, req.URL.Query().Get("uploadId"))
+		abortCtx := context.WithoutCancel(ctx)
+		_ = r.storageSvc.DeleteUploadID(abortCtx, user, bucket, object, req.URL.Query().Get("uploadId"))
 	}
 	return
 }
