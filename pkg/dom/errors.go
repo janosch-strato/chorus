@@ -33,7 +33,19 @@ var (
 	ErrAuth                 = errors.New("AuthError")
 	ErrPolicy               = errors.New("PolicyError")
 	ErrRoutingBlock         = errors.New("RoutingBlockedError")
+
+	// Nothing reached the storage, so there is nothing to replicate.
+	ErrClientGone = errors.New("ClientGone")
+	// The request was written and no answer was read, so the change may have
+	// been carried out: followed up on as if it had.
+	ErrStorageAnswerLost = errors.New("StorageAnswerLost")
 )
+
+// StorageMayHaveActed reports whether the storage may have carried out the
+// request, so that the change has to be followed up on.
+func StorageMayHaveActed(err error) bool {
+	return err == nil || errors.Is(err, ErrStorageAnswerLost)
+}
 
 func ErrCode(err error) int {
 	switch {

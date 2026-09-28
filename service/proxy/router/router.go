@@ -162,13 +162,15 @@ func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks
 		//todo: proxy unknown requests anyway???
 		err = dom.ErrNotImplemented
 	}
+	written := dom.StorageMayHaveActed(err)
+
 	// A deleted object is gone from the source storage, but the migration
 	// destination keeps it until the deletion has been replicated, so it must
 	// no longer count as migrated.
 	//
 	// The deletion is on the storage, so dropping the record must not depend
 	// on the client that asked for it still being there.
-	if err == nil && !isApiErr {
+	if written && !isApiErr {
 		switch method {
 		case s3.DeleteObject:
 			r.dropMigratedRecord(context.WithoutCancel(ctx), storage, object)
@@ -182,7 +184,7 @@ func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks
 		}
 	}
 
-	if err == nil && task != nil {
+	if written && task != nil {
 		task.SetFrom(storage)
 		if taskList == nil {
 			taskList = []tasks.SyncTask{task}

@@ -30,6 +30,7 @@ import (
 	"github.com/clyso/chorus/pkg/log"
 	"github.com/clyso/chorus/pkg/metrics"
 	"github.com/clyso/chorus/pkg/replication"
+	"github.com/clyso/chorus/pkg/tasks"
 	"github.com/clyso/chorus/pkg/util"
 )
 
@@ -51,20 +52,28 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 
 		resp, taskList, storage, isApiErr, err := router.Route(r)
 		routeDuration := time.Since(start)
-		if err != nil {
-			metrics.ProxyRequestInternalDuration(xctx.GetMethod(ctx).String(), storage, body.internalDuration())
-			timingFields(logger.Info().Err(err), timing).
-				Str(log.Storage, storage).
-				Dur("route_duration", routeDuration).
-				Msg("proxy: request failed")
-			util.WriteError(r.Context(), w, err)
-			return
-		}
+		// Before anything can return: a route that failed may still hold a
+		// connection open, and the paths below leave by more than one door.
 		defer func() {
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
 			}
 		}()
+		if err != nil {
+			metrics.ProxyRequestInternalDuration(xctx.GetMethod(ctx).String(), storage, body.internalDuration())
+			event := logger.Info().Err(err).
+				Str(log.Storage, storage).
+				Dur("route_duration", routeDuration).
+				Int("repl_tasks", replicate(ctx, replSvc, taskList, logger))
+			// The client is still there and has to be told.
+			if r.Context().Err() != nil {
+				timingFields(event, timing).Msg("proxy: client disconnected")
+				return
+			}
+			timingFields(event, timing).Msg("proxy: request failed")
+			util.WriteError(r.Context(), w, err)
+			return
+		}
 		var enqueueDuration time.Duration
 		ctx = log.WithStorage(ctx, storage)
 		// TODO: is it reachable? This branch is active only if err == nil
@@ -72,15 +81,20 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 			zerolog.Ctx(ctx).Info().Err(err).Msg("s3 api error returned")
 			// create replication tasks according to replication rules
 		} else {
-			replCtx := context.WithoutCancel(ctx)
 			enqueueStart := time.Now()
-			for _, task := range taskList {
-				replErr := replSvc.Replicate(replCtx, task)
-				if replErr != nil {
-					logger.Err(replErr).Msg("unable to handle replication")
-				}
-			}
+			replicate(ctx, replSvc, taskList, logger)
 			enqueueDuration = time.Since(enqueueStart)
+		}
+		// Nobody to hand the answer to; the replication above was what
+		// mattered.
+		if r.Context().Err() != nil {
+			timingFields(logger.Info(), timing).
+				Str(log.Storage, storage).
+				Dur("route_duration", routeDuration).
+				Int("status", resp.StatusCode).
+				Dur("repl_enqueue_duration", enqueueDuration).
+				Msg("proxy: client disconnected")
+			return
 		}
 		// Forward response to original client
 		for k, v := range resp.Header {
@@ -91,8 +105,8 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 		w.WriteHeader(resp.StatusCode)
 		written, err := io.Copy(w, resp.Body)
 		if err != nil {
-			logger.Err(err).Msg("unable to copy response body")
-			w.WriteHeader(http.StatusInternalServerError)
+			// The status is out, so there is no telling the client.
+			logger.Err(err).Int64("bytes", written).Msg("unable to copy response body")
 			return
 		}
 		// repl_enqueue_duration is the proxy side of a replication: recording
@@ -111,6 +125,24 @@ func Serve(router Router, replSvc replication.Service) http.Handler {
 			Dur("repl_enqueue_duration", enqueueDuration).
 			Msg("proxy: request done")
 	})
+}
+
+// On a context of its own: the change is on the storage, so recording it must
+// not depend on the client that asked still being there.
+func replicate(ctx context.Context, replSvc replication.Service, taskList []tasks.SyncTask, logger *zerolog.Logger) int {
+	if len(taskList) == 0 {
+		return 0
+	}
+	replCtx := context.WithoutCancel(ctx)
+	var enqueued int
+	for _, task := range taskList {
+		if err := replSvc.Replicate(replCtx, task); err != nil {
+			logger.Err(err).Msg("unable to handle replication")
+			continue
+		}
+		enqueued++
+	}
+	return enqueued
 }
 
 // clientRequestBody notes when the request was last read from. An upload is
