@@ -69,10 +69,9 @@ func (t measuredTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	return resp, err
 }
 
-// newS3Transport mirrors http.DefaultTransport apart from the idle
-// connection pool, which is sized for high-concurrency workers. One is made
-// per storage, see New().
-func newS3Transport() *http.Transport {
+// http.DefaultTransport apart from the idle pool, sized for high-concurrency
+// workers, and answerStart, which is unbounded when zero. One per storage.
+func newS3Transport(answerStart time.Duration) *http.Transport {
 	return &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
@@ -85,6 +84,7 @@ func newS3Transport() *http.Transport {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: answerStart,
 	}
 }
 

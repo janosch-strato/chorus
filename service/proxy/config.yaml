@@ -32,7 +32,8 @@ storage:
 #      provider: <Ceph|Minio|AWS|Other see providers list in rclone config> # https://rclone.org/s3/#configuration
 #      isMain: true # <true|false> one of the storages in should be main
 #      healthCheckInterval: 10s
-#      httpTimeout: 1m
+#      httpTimeout: 1m # how long one request to this storage may take, sending an upload included. unset means no limit
+#      responseHeaderTimeout: 2m # how long this storage may say nothing after being sent a request in full. sending and receiving are not counted. unset means 2m, a negative value means no limit
 #      isSecure: true #set false for http address
 #      rateLimit:
 #        enable: true
@@ -49,7 +50,8 @@ storage:
 #      provider: <Ceph|Minio|AWS|Other see providers list in rclone config> # https://rclone.org/s3/#configuration
 #      isMain: false # <true|false> one of the storages in should be main
 #      healthCheckInterval: 10s
-#      httpTimeout: 1m
+#      httpTimeout: 1m # how long one request to this storage may take, sending an upload included. unset means no limit
+#      responseHeaderTimeout: 2m # how long this storage may say nothing after being sent a request in full. sending and receiving are not counted. unset means 2m, a negative value means no limit
 #      isSecure: true #set false for http address
 #      rateLimit:
 #        enable: true

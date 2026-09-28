@@ -282,3 +282,27 @@ func TestDrainingBodyDoesNotCancelAfterItFinished(t *testing.T) {
 
 // What AbortResponse reaches for is the answer's own way of giving up, which
 // is the only thing that ends a read the storage has left waiting.
+func TestAbortResponseEndsTheRequestAnAnswerCameOn(t *testing.T) {
+	r := require.New(t)
+
+	ended := false
+	body := newDrainingBody(io.NopCloser(strings.NewReader("answer")), 6, func() { ended = true })
+
+	AbortResponse(&http.Response{Body: body})
+	r.True(ended, "the request the answer came on was left running")
+}
+
+// An answer already in memory, an api error's among them, has no request left
+// to end, and neither has one that never arrived.
+func TestAbortResponseLeavesAnAnswerWithNoRequestBehindIt(t *testing.T) {
+	r := require.New(t)
+
+	r.NotPanics(func() { AbortResponse(nil) })
+	r.NotPanics(func() { AbortResponse(&http.Response{}) })
+	r.NotPanics(func() {
+		AbortResponse(&http.Response{Body: io.NopCloser(strings.NewReader("an api error"))})
+	})
+	r.NotPanics(func() {
+		AbortResponse(&http.Response{Body: newDrainingBody(io.NopCloser(strings.NewReader("x")), 1, nil)})
+	})
+}
