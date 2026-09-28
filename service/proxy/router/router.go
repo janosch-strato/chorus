@@ -96,6 +96,15 @@ func (r *router) Route(req *http.Request) (resp *http.Response, taskList []tasks
 		}
 	}
 
+	// The storage carries these out on its own, and its answer is the only
+	// sign that it is done: the task made afterwards reads the source, and
+	// reads it too early without waiting.
+	switch method {
+	case s3.CopyObject, s3.CompleteMultipartUpload:
+		ctx = xctx.SetResponseNeeded(ctx)
+		req = req.WithContext(ctx)
+	}
+
 	switch method {
 	case s3.CreateBucket:
 		resp, task, storage, isApiErr, err = r.createBucket(req)

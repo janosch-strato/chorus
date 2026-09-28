@@ -17,19 +17,23 @@
 package router
 
 import (
+	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/hibiken/asynq"
 	"github.com/stretchr/testify/require"
 
+	xctx "github.com/clyso/chorus/pkg/ctx"
 	"github.com/clyso/chorus/pkg/dom"
 	"github.com/clyso/chorus/pkg/entity"
 	"github.com/clyso/chorus/pkg/features"
 	"github.com/clyso/chorus/pkg/meta"
 	"github.com/clyso/chorus/pkg/policy"
+	"github.com/clyso/chorus/pkg/s3"
 	"github.com/clyso/chorus/pkg/tasks"
 	"github.com/clyso/chorus/pkg/testutil"
 )
@@ -164,4 +168,52 @@ func TestRouteDeleteObjectVersionDoesNotDropTheMigratedRecord(t *testing.T) {
 	_, stillThere := queueSvc.Tasks[queue][taskID]
 	r.True(stillThere,
 		"the object stopped counting as migrated although nothing was deleted, so reads leave the destination for no reason")
+}
+
+func objectReq(req *http.Request, method s3.Method, object string) *http.Request {
+	ctx := req.Context()
+	ctx = xctx.SetUser(ctx, testUser)
+	ctx = xctx.SetBucket(ctx, testBucket)
+	ctx = xctx.SetObject(ctx, object)
+	ctx = xctx.SetMethod(ctx, method)
+	return req.WithContext(ctx)
+}
+
+// See Route: each is carried out by the storage on its own, so nothing else
+// says it is done.
+func TestRouteWaitsForTheAnswer(t *testing.T) {
+	copyReq := httptest.NewRequest(http.MethodPut, "/"+testBucket+"/obj", nil)
+	copyReq.Header.Set("x-amz-copy-source", "/"+testBucket+"/src")
+	completeReq := httptest.NewRequest(http.MethodPost, "/"+testBucket+"/obj?uploadId=u1",
+		strings.NewReader(`<CompleteMultipartUpload></CompleteMultipartUpload>`))
+
+	for _, tc := range []struct {
+		name  string
+		req   *http.Request
+		waits bool
+	}{
+		{"CopyObject", objectReq(copyReq, s3.CopyObject, "obj"), true},
+		{"CompleteMultipartUpload", objectReq(completeReq, s3.CompleteMultipartUpload, "obj"), true},
+		// A put is on the storage as soon as its body is out.
+		{"PutObject", objectReq(httptest.NewRequest(http.MethodPut, "/"+testBucket+"/obj",
+			strings.NewReader("body")), s3.PutObject, "obj"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := require.New(t)
+
+			var saw bool
+			rt := newTestRouter(t, &fakeClient{do: func(req *http.Request) (*http.Response, bool, error) {
+				saw = xctx.GetResponseNeeded(req.Context())
+				return nil, false, errors.New("storage unreachable in this test")
+			}})
+
+			_, _, _, _, err := rt.Route(tc.req)
+			r.Error(err)
+			if tc.waits {
+				r.True(saw, "the task made for this is only right once the storage is done, and nothing else says when that is")
+			} else {
+				r.False(saw, "a request needing no answer was put on the pool kept for the ones that do")
+			}
+		})
+	}
 }

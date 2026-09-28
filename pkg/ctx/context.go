@@ -31,6 +31,7 @@ type storageKey struct{}
 type flowKey struct{}
 type traceKey struct{}
 type userKey struct{}
+type responseNeededKey struct{}
 
 type Flow string
 
@@ -39,6 +40,17 @@ const (
 	Migration Flow = "migration"
 	Api       Flow = "api"
 )
+
+// Marks a request whose answer the proxy needs for itself, because what it
+// holds cannot be learned again later.
+func SetResponseNeeded(ctx context.Context) context.Context {
+	return context.WithValue(ctx, responseNeededKey{}, true)
+}
+
+func GetResponseNeeded(ctx context.Context) bool {
+	res, _ := ctx.Value(responseNeededKey{}).(bool)
+	return res
+}
 
 func SetMethod(ctx context.Context, in s3.Method) context.Context {
 	return context.WithValue(ctx, methodKey{}, in)

@@ -50,6 +50,11 @@ import (
 const (
 	s3MaxIdleConns        = 1024
 	s3MaxIdleConnsPerHost = 256
+
+	// The only bound the no-timeout pool's requests have. Small enough to show up
+	// in storage_requests_in_flight{pool="notimeout"} before file descriptors do.
+	s3NoTimeoutMaxConns            = 256
+	s3NoTimeoutMaxIdleConnsPerHost = 64
 )
 
 // The sdk clients do not go through client.Do, so without this the acl, tag and
@@ -57,15 +62,16 @@ const (
 type measuredTransport struct {
 	next    http.RoundTripper
 	storage string
+	pool    string
 }
 
 func (t measuredTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	inFlight := metrics.StorageInFlight(t.storage, req.Method)
+	inFlight := metrics.StorageInFlight(t.storage, req.Method, t.pool)
 	inFlight.Inc()
 	start := time.Now()
 	resp, err := t.next.RoundTrip(req)
 	inFlight.Dec()
-	metrics.StorageHTTPDuration(t.storage, req.Method, time.Since(start))
+	metrics.StorageHTTPDuration(t.storage, req.Method, t.pool, time.Since(start))
 	return resp, err
 }
 
@@ -91,14 +97,45 @@ func newS3Transport(storage string, answerStart time.Duration) *http.Transport {
 	}
 }
 
-func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsSvc metrics.S3Service, _ trace.TracerProvider, transport *http.Transport) (Client, error) {
+// Split by what a stuck request costs: a storage that stops answering must not
+// take the connections of the rest of the traffic with it.
+type storagePools struct {
+	shared    *http.Transport
+	noTimeout *http.Transport
+}
+
+func newStoragePools(storage string, answerStart time.Duration) storagePools {
+	// The config spells "no bound" as negative, the transport as zero, and
+	// would give up on every request at once on a negative one.
+	answerStart = max(answerStart, 0)
+	return storagePools{shared: newS3Transport(storage, answerStart), noTimeout: newNoTimeoutTransport(storage)}
+}
+
+// For the requests whose answer the proxy needs for itself. Nothing bounds how
+// long they may wait: the answer is the only place their outcome is named.
+func newNoTimeoutTransport(storage string) *http.Transport {
+	t := newS3Transport(storage, 0)
+	t.MaxConnsPerHost = s3NoTimeoutMaxConns
+	t.MaxIdleConns = s3NoTimeoutMaxConns
+	t.MaxIdleConnsPerHost = s3NoTimeoutMaxIdleConnsPerHost
+	// One http/2 connection carries any number of requests, so the cap would
+	// bound nothing. This path is low rate, so http/1.1 costs it nothing.
+	t.ForceAttemptHTTP2 = false
+	return t
+}
+
+func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsSvc metrics.S3Service, _ trace.TracerProvider, pools storagePools) (Client, error) {
 	c := &client{
 		// Not http.DefaultTransport: it keeps 2 idle connections per host and
 		// is shared process wide, which would let an InsecureSkipVerify set
 		// for one storage reach every other user of it.
 		c: &http.Client{
 			Timeout:   conf.HttpTimeout,
-			Transport: transport,
+			Transport: pools.shared,
+		},
+		// No timeout on purpose, see newNoTimeoutTransport.
+		noTimeout: &http.Client{
+			Transport: pools.noTimeout,
 		},
 		online:     &atomic.Bool{},
 		conf:       conf,
@@ -111,7 +148,7 @@ func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsS
 	mc, err := mclient.New(conf.Address.Value(), &mclient.Options{
 		Creds:     credentials.NewStaticV4(c.cred.AccessKeyID, c.cred.SecretAccessKey, ""),
 		Secure:    conf.IsSecure,
-		Transport: measuredTransport{next: transport, storage: name},
+		Transport: measuredTransport{next: pools.shared, storage: name, pool: metrics.PoolShared},
 	})
 	if err != nil {
 		return nil, err
@@ -139,7 +176,7 @@ func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsS
 		}
 	}(conf.HealthCheckInterval)
 
-	awsClient, err := newAWSClient(conf, name, user, metricsSvc, transport)
+	awsClient, err := newAWSClient(conf, name, user, metricsSvc, pools.shared)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +212,9 @@ func isOnline(ctx context.Context, c *client) error {
 }
 
 type client struct {
-	c          *http.Client
+	c *http.Client
+	// See newNoTimeoutTransport.
+	noTimeout  *http.Client
 	s3         *S3
 	aws        *AWS
 	sns        *sns.Client
@@ -309,21 +348,26 @@ func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err 
 		cancel context.CancelFunc
 		write  *requestWrite
 	)
+	doer, pool := c.c, metrics.PoolShared
 	if isReadOnly(xctx.GetMethod(ctx)) {
 		// Only until the answer starts: from there the connection is worth
 		// more than the rest of a body nobody wants.
 		base, cancel = cancelUntilAnswered(ctx)
 	} else {
 		// A write cannot be taken back once it is out.
+		if xctx.GetResponseNeeded(ctx) {
+			// Its own pool, so waiting cannot hold up the other traffic.
+			doer, pool = c.noTimeout, metrics.PoolNoTimeout
+		}
 		base, cancel, write = cancelUntilWritten(ctx, newReq.ContentLength != 0)
 	}
 	timing := xctx.GetTiming(ctx)
 	newReq = newReq.WithContext(xctx.TraceContext(base, timing))
 
-	inFlight := metrics.StorageInFlight(c.name, xctx.GetMethod(ctx).String())
+	inFlight := metrics.StorageInFlight(c.name, xctx.GetMethod(ctx).String(), pool)
 	inFlight.Inc()
 	_, doReqSpan := otel.Tracer("").Start(ctx, fmt.Sprintf("clientDo.%s.DoReq", xctx.GetMethod(req.Context()).String()))
-	resp, err = c.c.Do(newReq)
+	resp, err = doer.Do(newReq)
 	err = write.classify(err)
 	doReqSpan.End()
 	inFlight.Dec()

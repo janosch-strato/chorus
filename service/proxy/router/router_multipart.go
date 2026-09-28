@@ -36,23 +36,23 @@ func (r *router) createMultipartUpload(req *http.Request) (resp *http.Response, 
 	ctx := req.Context()
 	user, bucket, object := xctx.GetUser(ctx), xctx.GetBucket(ctx), xctx.GetObject(ctx)
 
-	resp, storage, isApiErr, err = r.commonWrite(req)
-	if err != nil || isApiErr {
-		return
-	}
-
+	// The upload id is named in the answer alone, and no replication task can
+	// make up for one never read. Asked before the request, because that is
+	// when it has to be known.
 	replicationSwitchInfoID := entity.NewReplicationSwitchInfoID(user, bucket)
 	replSwitch, switchErr := r.policySvc.GetInProgressZeroDowntimeSwitchInfo(ctx, replicationSwitchInfoID)
-	if switchErr != nil {
-		if errors.Is(switchErr, dom.ErrNotFound) {
-			// no switch in progress
-			return
-		}
-		//return error
-		err = switchErr
+	switchInProgress := switchErr == nil
+	if switchErr != nil && !errors.Is(switchErr, dom.ErrNotFound) {
+		return nil, "", false, switchErr
+	}
+	if switchInProgress {
+		req = req.WithContext(xctx.SetResponseNeeded(ctx))
+	}
+
+	resp, storage, isApiErr, err = r.commonWrite(req)
+	if err != nil || isApiErr || !switchInProgress {
 		return
 	}
-	// switch in progress
 
 	respBody := initiateMultipartUploadResult{}
 	err = s3client.ExtractRespBody(resp, &respBody)
