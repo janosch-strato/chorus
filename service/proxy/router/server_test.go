@@ -17,12 +17,21 @@
 package router
 
 import (
+	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
+
+	xctx "github.com/clyso/chorus/pkg/ctx"
+	"github.com/clyso/chorus/pkg/dom"
+	"github.com/clyso/chorus/pkg/tasks"
 )
 
 // slowReader hands out one byte per call, taking its time over it, the way a
@@ -62,4 +71,89 @@ func Test_clientRequestBody(t *testing.T) {
 		time.Sleep(delay)
 		r.GreaterOrEqual(body.internalDuration(), delay, "nothing read, so everything since is ours")
 	})
+}
+
+type recordingReplication struct{ got context.Context }
+
+func (r *recordingReplication) Replicate(ctx context.Context, _ tasks.SyncTask) error {
+	r.got = ctx
+	return nil
+}
+
+// The change is on the storage, so recording it must not depend on the client
+// still being there - while still counting in what the request reports, which
+// a hand copied context used to lose.
+func TestReplicateOutlivesTheClient(t *testing.T) {
+	r := require.New(t)
+
+	base, disconnect := context.WithCancel(context.Background())
+	ctx, timing := xctx.WithTiming(base)
+	disconnect()
+	r.Error(ctx.Err(), "the client context should be cancelled for this test to mean anything")
+
+	recorder := &recordingReplication{}
+	logger := zerolog.Nop()
+	enqueued := replicate(ctx, recorder, []tasks.SyncTask{&tasks.ObjectSyncPayload{}}, &logger)
+
+	r.Equal(1, enqueued)
+	r.NotNil(recorder.got)
+	r.NoError(recorder.got.Err(),
+		"the change was recorded on the very context the client had just cancelled")
+	r.Same(timing, xctx.GetTiming(recorder.got),
+		"the detached context lost the request's timing, so its redis calls go unmeasured")
+}
+
+type fakeRouter struct {
+	route func(*http.Request) (*http.Response, []tasks.SyncTask, string, bool, error)
+}
+
+func (f fakeRouter) Route(r *http.Request) (*http.Response, []tasks.SyncTask, string, bool, error) {
+	return f.route(r)
+}
+
+type noReplication struct{}
+
+func (noReplication) Replicate(context.Context, tasks.SyncTask) error { return nil }
+
+type closingBody struct {
+	io.Reader
+	closed atomic.Bool
+}
+
+func (b *closingBody) Close() error {
+	b.closed.Store(true)
+	return nil
+}
+
+// A connection only returns to its pool once the answer is closed, so every
+// way out of the handler has to close one that arrived.
+func TestServeClosesTheStorageAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		isApiEr bool
+	}{
+		{name: "an answer that is forwarded"},
+		{name: "an answer whose route then failed", err: dom.ErrInternal},
+		{name: "an answer of a client that left", err: dom.ErrClientGone},
+		{name: "an api error", isApiEr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := require.New(t)
+
+			body := &closingBody{Reader: strings.NewReader("answer")}
+			handler := Serve(fakeRouter{route: func(*http.Request) (*http.Response, []tasks.SyncTask, string, bool, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       body,
+					Header:     http.Header{},
+				}, nil, testSource, tc.isApiEr, tc.err
+			}}, noReplication{})
+
+			handler.ServeHTTP(httptest.NewRecorder(),
+				httptest.NewRequest(http.MethodGet, "/"+testBucket+"/obj", nil))
+
+			r.True(body.closed.Load(), "the storage answer was never closed, so its connection is held")
+		})
+	}
 }
