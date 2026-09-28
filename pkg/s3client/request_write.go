@@ -71,7 +71,12 @@ func (w *requestWrite) followClientUntilSettled(clientCtx context.Context) (cont
 		w.gaveUp = true
 		cancel()
 	})
-	return ctx, cancel
+	// Ending the request also ends the watch: a request that failed before it
+	// settled would otherwise stay registered on the client until it leaves.
+	return ctx, func() {
+		cancel()
+		w.stop()
+	}
 }
 
 // For a request that changes the storage.
