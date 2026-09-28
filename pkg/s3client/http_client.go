@@ -299,16 +299,17 @@ func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err 
 	// worked for an answer nobody waits for any more. Safe because an answered
 	// request's body is read within the proxy handler.
 	var (
-		base  context.Context
-		write *requestWrite
+		base   context.Context
+		cancel context.CancelFunc
+		write  *requestWrite
 	)
 	if isReadOnly(xctx.GetMethod(ctx)) {
 		// Only until the answer starts: from there the connection is worth
 		// more than the rest of a body nobody wants.
-		base, _ = cancelUntilAnswered(ctx)
+		base, cancel = cancelUntilAnswered(ctx)
 	} else {
 		// A write cannot be taken back once it is out.
-		base, _, write = cancelUntilWritten(ctx, newReq.ContentLength != 0)
+		base, cancel, write = cancelUntilWritten(ctx, newReq.ContentLength != 0)
 	}
 	timing := xctx.GetTiming(ctx)
 	newReq = newReq.WithContext(xctx.TraceContext(base, timing))
@@ -346,6 +347,9 @@ func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err 
 	if err != nil {
 		return nil, false, err
 	}
+	// The connection depends on the answer being read to the end, and whoever
+	// reads it is not obliged to.
+	resp.Body = newDrainingBody(resp.Body, resp.ContentLength, cancel)
 	return
 }
 
