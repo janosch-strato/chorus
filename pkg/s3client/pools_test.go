@@ -10,6 +10,53 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestStoragePools(t *testing.T) {
+	const answerStart = 5 * time.Minute
+
+	r := require.New(t)
+	pools := newStoragePools(answerStart)
+
+	t.Run("The two pools are separate", func(t *testing.T) {
+		// A storage hanging on the answer pool must not take the connections
+		// of the ordinary traffic.
+		r.NotSame(pools.shared, pools.answer, "both clients would share one pool")
+	})
+
+	t.Run("The answer pool is capped, because nothing else bounds it", func(t *testing.T) {
+		// They have no timeout, so connections are the only bound.
+		r.EqualValues(s3AnswerMaxConns, pools.answer.MaxConnsPerHost)
+		r.EqualValues(s3AnswerMaxIdleConnsPerHost, pools.answer.MaxIdleConnsPerHost)
+		r.False(pools.answer.ForceAttemptHTTP2,
+			"one http/2 connection carries any number of requests, which would leave the cap bounding nothing")
+	})
+
+	t.Run("The shared pool is unchanged", func(t *testing.T) {
+		r.Zero(pools.shared.MaxConnsPerHost, "the ordinary traffic is bounded by the http timeout, not by a cap")
+		r.EqualValues(s3MaxIdleConnsPerHost, pools.shared.MaxIdleConnsPerHost)
+		r.True(pools.shared.ForceAttemptHTTP2)
+	})
+
+	t.Run("Only the shared pool bounds the silence before an answer", func(t *testing.T) {
+		r.EqualValues(answerStart, pools.shared.ResponseHeaderTimeout,
+			"the configured bound did not reach the pool it is for")
+		r.Zero(pools.answer.ResponseHeaderTimeout,
+			"a request whose answer is the only record of its outcome was given up on")
+	})
+
+	// http.Transport would give up on every request at once.
+	t.Run("A negative bound is none", func(t *testing.T) {
+		r.Zero(newStoragePools(-1).shared.ResponseHeaderTimeout,
+			"a storage asked for no bound and got one that fires immediately")
+	})
+
+	t.Run("Both inherit the settings they have in common", func(t *testing.T) {
+		r.Equal(pools.shared.IdleConnTimeout, pools.answer.IdleConnTimeout)
+		r.Equal(pools.shared.TLSHandshakeTimeout, pools.answer.TLSHandshakeTimeout)
+		r.Equal(pools.shared.ExpectContinueTimeout, pools.answer.ExpectContinueTimeout)
+	})
+}
+
+// The bound is on the silence, not on the request: an object has no size limit.
 func TestResponseHeaderTimeoutSpansOnlyTheSilence(t *testing.T) {
 	const bound = 150 * time.Millisecond
 
