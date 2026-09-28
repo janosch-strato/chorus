@@ -16,7 +16,10 @@
 
 package features
 
-import "context"
+import (
+	"context"
+	"sync/atomic"
+)
 
 type Config struct {
 	Versioning        bool `yaml:"versioning"`
@@ -27,32 +30,35 @@ type Config struct {
 	PreserveACLGrants bool `yaml:"preserveACLGrants"`
 }
 
-var val *Config
+// Held atomically because standalone mode starts worker and proxy as
+// goroutines and each sets the features on the way up, while every feature
+// check reads them.
+var val atomic.Pointer[Config]
 
 func Set(c *Config) {
-	val = c
+	val.Store(c)
 }
 
 func Versioning(_ context.Context) bool {
-	return val.Versioning
+	return val.Load().Versioning
 }
 
 func Tagging(_ context.Context) bool {
-	return val.Tagging
+	return val.Load().Tagging
 }
 
 func ACL(_ context.Context) bool {
-	return val.ACL
+	return val.Load().ACL
 }
 
 func Lifecycle(_ context.Context) bool {
-	return val.Lifecycle
+	return val.Load().Lifecycle
 }
 
 func Policy(_ context.Context) bool {
-	return val.Policy
+	return val.Load().Policy
 }
 
 func PreserveACLGrants(_ context.Context) bool {
-	return val.PreserveACLGrants
+	return val.Load().PreserveACLGrants
 }
