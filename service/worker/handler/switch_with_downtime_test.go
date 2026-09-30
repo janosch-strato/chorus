@@ -103,8 +103,7 @@ func Test_SwitchWithDowntimeStateMachine(t *testing.T) {
 				// Filled in although unread here, so that a change reaching
 				// it fails on an assertion and not on a nil pointer.
 				ReplicationStatus: &entity.ReplicationStatus{
-					CreatedAt:      lastStart.Add(-time.Hour),
-					ListingStarted: true,
+					CreatedAt: lastStart.Add(-time.Hour),
 				},
 			}, entity.ReplicationSwitchInfo{
 				ReplicationSwitchDowntimeOpts: entity.ReplicationSwitchDowntimeOpts{
