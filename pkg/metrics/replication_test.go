@@ -38,7 +38,7 @@ func (f listerFunc) ListReplicationPolicyInfo(ctx context.Context) (map[entity.R
 
 func replication(pending int, latency time.Duration) entity.ReplicationStatusExtended {
 	return entity.ReplicationStatusExtended{
-		ReplicationStatus: &entity.ReplicationStatus{ListingStarted: true},
+		ReplicationStatus: &entity.ReplicationStatus{ListingDone: true},
 		InitMigration: entity.QueueStats{
 			Pending: pending,
 			Done:    7,
@@ -77,8 +77,8 @@ func Test_ReplicationCollector(t *testing.T) {
 	r.InDelta(4, phaseValue(t, collector, "replication_queue_failed", PhaseEvent), 0.001)
 	r.InDelta(1024, phaseValue(t, collector, "replication_queue_memory_bytes", PhaseEvent), 0.001)
 
-	// listing has started, but the initial migration has 11 tasks left
-	r.InDelta(1, phaseValue(t, collector, "replication_listing_started", ""), 0.001)
+	// the listing is done, but the initial migration has 11 tasks left
+	r.InDelta(1, phaseValue(t, collector, "replication_listing_done", ""), 0.001)
 	r.InDelta(0, phaseValue(t, collector, "replication_init_done", ""), 0.001)
 	r.InDelta(0, phaseValue(t, collector, "replication_live_sync", ""), 0.001)
 	r.InDelta(0, phaseValue(t, collector, "replication_paused", ""), 0.001)
