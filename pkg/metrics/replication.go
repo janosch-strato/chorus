@@ -77,11 +77,11 @@ var (
 	replicationPausedDesc = prometheus.NewDesc("replication_paused",
 		"1 while at least one queue of the replication is paused.",
 		replicationLabels, nil)
-	replicationListingStartedDesc = prometheus.NewDesc("replication_listing_started",
-		"1 once the listing of the source bucket has begun, which tells a replication that has not started yet from one that is still copying.",
+	replicationListingDoneDesc = prometheus.NewDesc("replication_listing_done",
+		"1 once the listing of the source bucket has queued every object, which tells a replication still listing from one that is only copying.",
 		replicationLabels, nil)
 	replicationInitDoneDesc = prometheus.NewDesc("replication_init_done",
-		"1 once the listing has started and the initial migration has nothing left to copy. This is the state of the queues at the moment of the read, see replication_live_sync for the durable fact.",
+		"1 once the listing is done and the initial migration has nothing left to copy. This is the state of the queues at the moment of the read, see replication_live_sync for the durable fact.",
 		replicationLabels, nil)
 	replicationLiveSyncDesc = prometheus.NewDesc("replication_live_sync",
 		"1 once the copy that finished the initial sync recorded it. Unlike replication_init_done this stays true while events keep the destination up to date.",
@@ -171,7 +171,7 @@ func (c *ReplicationCollector) refresh(ctx context.Context) {
 		samples = append(samples, replicationSample{
 			labels:   []string{id.FromStorage, id.FromBucket, id.ToStorage, id.ToBucket},
 			paused:   replication.IsPaused,
-			listing:  replication.ListingStarted,
+			listing:  replication.ListingDone,
 			initDone: replication.InitDone(),
 			liveSync: replication.LiveSync,
 			archived: replication.IsArchived,
@@ -186,7 +186,7 @@ func (c *ReplicationCollector) Describe(ch chan<- *prometheus.Desc) {
 	for _, desc := range []*prometheus.Desc{
 		queuePendingDesc, queueProcessedDesc, queueRetryDesc, queueFailedDesc,
 		queueLatencyDesc, queueMemoryDesc,
-		replicationPausedDesc, replicationListingStartedDesc, replicationInitDoneDesc,
+		replicationPausedDesc, replicationListingDoneDesc, replicationInitDoneDesc,
 		replicationLiveSyncDesc, replicationArchivedDesc,
 	} {
 		ch <- desc
@@ -200,7 +200,7 @@ func (c *ReplicationCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 	for _, sample := range *samples {
 		gauge(ch, replicationPausedDesc, boolValue(sample.paused), sample.labels)
-		gauge(ch, replicationListingStartedDesc, boolValue(sample.listing), sample.labels)
+		gauge(ch, replicationListingDoneDesc, boolValue(sample.listing), sample.labels)
 		gauge(ch, replicationInitDoneDesc, boolValue(sample.initDone), sample.labels)
 		gauge(ch, replicationLiveSyncDesc, boolValue(sample.liveSync), sample.labels)
 		gauge(ch, replicationArchivedDesc, boolValue(sample.archived), sample.labels)

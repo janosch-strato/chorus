@@ -96,13 +96,13 @@ over the queues of a phase.
 
 **Replications.** What the queues cannot say, same labels:
 
-| metric                        | what                                                        |
-|-------------------------------|-------------------------------------------------------------|
-| `replication_listing_started` | 1 once the listing of the source bucket has begun           |
-| `replication_init_done`       | 1 once the listing started and nothing is left to copy      |
-| `replication_live_sync`       | 1 once the initial sync recorded itself as finished         |
-| `replication_paused`          | 1 while at least one queue of the replication is paused     |
-| `replication_archived`        | 1 for a replication that neither emits nor syncs events     |
+| metric                     | what                                                        |
+|----------------------------|-------------------------------------------------------------|
+| `replication_listing_done` | 1 once the listing of the source bucket has queued it all   |
+| `replication_init_done`    | 1 once the listing is done and nothing is left to copy      |
+| `replication_live_sync`    | 1 once the initial sync recorded itself as finished         |
+| `replication_paused`       | 1 while at least one queue of the replication is paused     |
+| `replication_archived`     | 1 for a replication that neither emits nor syncs events     |
 
 `replication_init_done` is the state of the queues at the moment of the read
 and can flip back when work arrives; `replication_live_sync` is the durable
@@ -346,7 +346,7 @@ What cannot come back: what is only ever a measurement, with no beginning and
 end to read. The queue collector's `queue_tasks` by state, its memory usage
 and paused flags, `storage_connections_open`, the lock and rate limit
 families, `rclone_calc_mem_usage`, and the `replication_*` flags —
-`listing_started`, `init_done`, `live_sync`, `archived`. Histogram buckets are
+`listing_done`, `init_done`, `live_sync`, `archived`. Histogram buckets are
 gone too; only the sum and the count survive, which is enough for the mean and
 not for a quantile.
 
