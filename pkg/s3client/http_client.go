@@ -348,7 +348,7 @@ func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err 
 		cancel context.CancelFunc
 		write  *requestWrite
 	)
-	doer, pool := c.c, metrics.PoolShared
+	client, pool := c.c, metrics.PoolShared
 	if isReadOnly(xctx.GetMethod(ctx)) {
 		// Only until the answer starts: from there the connection is worth
 		// more than the rest of a body nobody wants.
@@ -357,7 +357,7 @@ func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err 
 		// A write cannot be taken back once it is out.
 		if xctx.GetResponseNeeded(ctx) {
 			// Its own pool, so waiting cannot hold up the other traffic.
-			doer, pool = c.noTimeout, metrics.PoolNoTimeout
+			client, pool = c.noTimeout, metrics.PoolNoTimeout
 		}
 		base, cancel, write = cancelUntilWritten(ctx, newReq.ContentLength != 0)
 	}
@@ -367,7 +367,7 @@ func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err 
 	inFlight := metrics.StorageInFlight(c.name, xctx.GetMethod(ctx).String(), pool)
 	inFlight.Inc()
 	_, doReqSpan := otel.Tracer("").Start(ctx, fmt.Sprintf("clientDo.%s.DoReq", xctx.GetMethod(req.Context()).String()))
-	resp, err = doer.Do(newReq)
+	resp, err = client.Do(newReq)
 	err = write.classify(err)
 	doReqSpan.End()
 	inFlight.Dec()
