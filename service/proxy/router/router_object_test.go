@@ -25,7 +25,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hibiken/asynq"
 	"github.com/stretchr/testify/require"
 
 	xctx "github.com/clyso/chorus/pkg/ctx"
@@ -35,7 +34,8 @@ import (
 	"github.com/clyso/chorus/pkg/meta"
 	"github.com/clyso/chorus/pkg/policy"
 	"github.com/clyso/chorus/pkg/s3"
-	"github.com/clyso/chorus/pkg/tasks"
+	"github.com/clyso/chorus/pkg/settings"
+	"github.com/clyso/chorus/pkg/storage"
 	"github.com/clyso/chorus/pkg/testutil"
 )
 
@@ -200,29 +200,31 @@ func TestRouteDeleteObjectVersionDoesNotDropTheMigratedRecord(t *testing.T) {
 	c := testutil.SetupRedis(t)
 	policySvc := policy.NewService(c, nil, nil)
 	r.NoError(policySvc.AddBucketRoutingPolicy(ctx, entity.NewBucketRoutingPolicyID(testUser, testBucket), testSource, false))
-	_, err := policySvc.AddBucketReplicationPolicy(ctx,
-		entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket))
+	replID := entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket)
+	_, err := policySvc.AddBucketReplicationPolicy(ctx, replID)
 	r.NoError(err)
+	r.NoError(policySvc.ListingDone(ctx, replID))
 
-	queueSvc := &tasks.QueueServiceMock{}
+	storageSvc := storage.New(c)
+	r.NoError(settings.ReadFromDestination.Set(true))
+	t.Cleanup(func() { r.NoError(settings.ReadFromDestination.Set(false)) })
 	rt := &router{
-		clients:             fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) { return nil, false, nil }}},
-		policySvc:           policySvc,
-		versionSvc:          meta.NewVersionService(c),
-		queueSvc:            queueSvc,
-		readFromDestination: true,
+		clients:    fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) { return nil, false, nil }}},
+		policySvc:  policySvc,
+		versionSvc: meta.NewVersionService(c),
+		storageSvc: storageSvc,
 	}
 
-	setCopyState(queueSvc, "obj", asynq.TaskStateCompleted)
-	queue, taskID := migrationCopyTask(testSource, testUser, testBucket, "obj",
-		entity.NewBucketReplicationPolicyDestination(testDest, testBucket))
-	_, seeded := queueSvc.Tasks[queue][taskID]
-	r.True(seeded, "the copy record was not seeded, so this test proves nothing")
+	setMigrated(t, storageSvc, "obj")
+	seeded, err := storageSvc.IsMigratedObj(ctx, replID, "obj")
+	r.NoError(err)
+	r.True(seeded, "the migrated record was not seeded, so this test proves nothing")
 
 	_, _, _, _, err = rt.Route(deleteObjectReq("obj", "3HL4kqtGWpM"))
 	r.ErrorIs(err, dom.ErrNotImplemented)
 
-	_, stillThere := queueSvc.Tasks[queue][taskID]
+	stillThere, err := storageSvc.IsMigratedObj(ctx, replID, "obj")
+	r.NoError(err)
 	r.True(stillThere,
 		"the object stopped counting as migrated although nothing was deleted, so reads leave the destination for no reason")
 }
