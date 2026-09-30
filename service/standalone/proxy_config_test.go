@@ -32,6 +32,7 @@ func standaloneConf() *Config {
 		DestinationTimeoutLimit:  3,
 		DestinationPause:         time.Minute,
 		InstanceID:               "standalone-proxy",
+		HeadBucketCache:          "disabled",
 	}
 	return conf
 }
