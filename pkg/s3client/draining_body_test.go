@@ -182,7 +182,7 @@ func TestDrainingBodyCountsWhatWasRead(t *testing.T) {
 func testClient(t *testing.T, srv *httptest.Server) *client {
 	t.Helper()
 	return &client{
-		c:          srv.Client(),
+		shared:     srv.Client(),
 		conf:       s3.Storage{Address: s3.NewConfAddr(srv.URL)},
 		name:       "storage",
 		user:       "user",
