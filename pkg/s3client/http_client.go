@@ -129,7 +129,7 @@ func newClient(ctx context.Context, conf s3.Storage, name, user string, metricsS
 		// Not http.DefaultTransport: it keeps 2 idle connections per host and
 		// is shared process wide, which would let an InsecureSkipVerify set
 		// for one storage reach every other user of it.
-		c: &http.Client{
+		shared: &http.Client{
 			Timeout:   conf.HttpTimeout,
 			Transport: pools.shared,
 		},
@@ -212,7 +212,7 @@ func isOnline(ctx context.Context, c *client) error {
 }
 
 type client struct {
-	c *http.Client
+	shared *http.Client
 	// See newNoTimeoutTransport.
 	noTimeout  *http.Client
 	s3         *S3
@@ -348,7 +348,7 @@ func (c *client) Do(req *http.Request) (resp *http.Response, isApiErr bool, err 
 		cancel context.CancelFunc
 		write  *requestWrite
 	)
-	client, pool := c.c, metrics.PoolShared
+	client, pool := c.shared, metrics.PoolShared
 	if isReadOnly(xctx.GetMethod(ctx)) {
 		// Only until the answer starts: from there the connection is worth
 		// more than the rest of a body nobody wants.
