@@ -301,7 +301,8 @@ func (r *router) readDestination(req *http.Request, destStorage, destBucket stri
 	defer func() {
 		*req.URL = origURL
 	}()
-	answerCtx, guard := withAnswerTimeout(ctx, r.destinationAnswerTimeout)
+	answerCtx, guard := withAnswerTimeout(ctx,
+		time.Duration(settings.DestinationAnswerTimeout.Get())*time.Millisecond)
 	destReq := req.WithContext(answerCtx)
 	if err = rewriteBucket(destReq, xctx.GetBucket(ctx), destBucket); err != nil {
 		return nil, false, err
@@ -320,7 +321,7 @@ func (r *router) readDestination(req *http.Request, destStorage, destBucket stri
 		if r.destPause.timedOut(destStorage) {
 			metrics.ProxyDestinationPaused(destStorage)
 			zerolog.Ctx(ctx).Warn().Str("destination_storage", destStorage).
-				Dur("pause", r.destPause.pause).
+				Dur("pause", r.destPause.pause()).
 				Msg("read from destination: destination did not answer, pausing reads to it")
 		}
 		// Join, not %w: err is nil when an answer turned up after the wait.

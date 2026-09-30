@@ -52,6 +52,14 @@ const (
 	testBucket = "buck"
 )
 
+// answerTimeout sets the wait for the test and puts it back afterwards.
+func answerTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := settings.DestinationAnswerTimeout.Get()
+	require.NoError(t, settings.DestinationAnswerTimeout.Set(d.Milliseconds()))
+	t.Cleanup(func() { require.NoError(t, settings.DestinationAnswerTimeout.Set(prev)) })
+}
+
 func readReq(method s3.Method, object, target string) *http.Request {
 	req := httptest.NewRequest(http.MethodGet, target, nil)
 	ctx := req.Context()
@@ -243,7 +251,7 @@ func Test_router_destinationReadRoute(t *testing.T) {
 		r := require.New(t)
 		object := "migrated"
 		clock := newTestClock()
-		rt.destPause = newDestinationPause(1, time.Minute)
+		rt.destPause = pauseWith(t, 1, time.Minute)
 		rt.destPause.now = clock.Now
 		defer func() { rt.destPause = nil }()
 
@@ -535,8 +543,8 @@ func TestReadDestinationGivenUpOn(t *testing.T) {
 	r := require.New(t)
 
 	answered := make(chan struct{})
+	answerTimeout(t, 20*time.Millisecond)
 	rt := &router{
-		destinationAnswerTimeout: 20 * time.Millisecond,
 		clients: fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
 			time.Sleep(100 * time.Millisecond)
 			close(answered)
@@ -603,9 +611,9 @@ func TestCommonReadFallsBackOnABodilessAnswer(t *testing.T) {
 func TestAnApiErrorCountsAsAnAnswer(t *testing.T) {
 	r := require.New(t)
 
+	answerTimeout(t, time.Minute)
 	rt := &router{
-		destinationAnswerTimeout: time.Minute,
-		destPause:                newDestinationPause(3, time.Minute),
+		destPause: pauseWith(t, 3, time.Minute),
 		clients: fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) {
 			// As s3client.Do returns one: an api error is an err too.
 			resp := &http.Response{StatusCode: http.StatusNotFound, Header: http.Header{}}

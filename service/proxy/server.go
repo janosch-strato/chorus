@@ -95,6 +95,17 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	if err = settings.ReadFromDestination.Set(conf.ReadFromDestination); err != nil {
 		return err
 	}
+	// Negative in the config means the read waits as any other, which the
+	// switches spell as zero.
+	if err = settings.DestinationAnswerTimeout.Set(max(conf.DestinationAnswerTimeout.Milliseconds(), 0)); err != nil {
+		return err
+	}
+	if err = settings.DestinationTimeoutLimit.Set(int64(max(conf.DestinationTimeoutLimit, 0))); err != nil {
+		return err
+	}
+	if err = settings.DestinationPause.Set(max(conf.DestinationPause.Milliseconds(), 0)); err != nil {
+		return err
+	}
 	if err = settings.HeadBucketCache.SetString(conf.HeadBucketCache); err != nil {
 		return err
 	}
@@ -140,8 +151,7 @@ func Start(ctx context.Context, app dom.AppInfo, conf *Config, serveMetrics bool
 	}
 
 	routeSvc := router.NewRouter(s3Clients, taskClient, verSvc, policySvc, storageSvc, limiter,
-		replSvc, deleteIntents, conf.InstanceID,
-		conf.DestinationAnswerTimeout, conf.DestinationTimeoutLimit, conf.DestinationPause)
+		replSvc, deleteIntents, conf.InstanceID)
 	handler := router.Serve(routeSvc, replSvc)
 	handler = auth.Middleware(conf.Auth, conf.Storage.Storages).Wrap(handler)
 	if conf.Metrics.Enabled {

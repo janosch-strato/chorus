@@ -19,7 +19,6 @@ package router
 import (
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/hibiken/asynq"
 
@@ -49,22 +48,18 @@ func NewRouter(
 	limit ratelimit.RPM,
 	replSvc replication.Service,
 	deleteIntents *meta.DeleteIntents,
-	instanceID string,
-	destinationAnswerTimeout time.Duration,
-	destinationTimeoutLimit int,
-	destinationPauseTime time.Duration) Router {
+	instanceID string) Router {
 	return &router{
-		clients:                  clients,
-		taskClient:               taskClient,
-		replSvc:                  replSvc,
-		deleteIntents:            deleteIntents,
-		instanceID:               instanceID,
-		versionSvc:               versionSvc,
-		policySvc:                policySvc,
-		storageSvc:               storageSvc,
-		limit:                    limit,
-		destinationAnswerTimeout: destinationAnswerTimeout,
-		destPause:                newDestinationPause(destinationTimeoutLimit, destinationPauseTime),
+		clients:       clients,
+		taskClient:    taskClient,
+		replSvc:       replSvc,
+		deleteIntents: deleteIntents,
+		instanceID:    instanceID,
+		versionSvc:    versionSvc,
+		policySvc:     policySvc,
+		storageSvc:    storageSvc,
+		limit:         limit,
+		destPause:     newDestinationPause(),
 	}
 }
 
@@ -83,8 +78,6 @@ type router struct {
 	policySvc  policy.Service
 	storageSvc storage.Service
 	limit      ratelimit.RPM
-	// destinationAnswerTimeout, see withAnswerTimeout.
-	destinationAnswerTimeout time.Duration
 	// See destination_pause.go.
 	destPause *destinationPause
 }

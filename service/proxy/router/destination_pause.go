@@ -32,13 +32,13 @@ package router
 import (
 	"sync"
 	"time"
+
+	"github.com/clyso/chorus/pkg/settings"
 )
 
 // A nil one, and one whose limit or pause is not positive, never pauses.
 type destinationPause struct {
-	limit int              // answer timeouts in a row that pause reads
-	pause time.Duration    // how long they stay paused
-	now   func() time.Time // time.Now, replaced by tests
+	now func() time.Time // time.Now, replaced by tests
 
 	mu    sync.Mutex
 	state map[string]destinationTimeouts
@@ -49,17 +49,25 @@ type destinationTimeouts struct {
 	until time.Time // reads are paused until then, zero if they are not
 }
 
-func newDestinationPause(limit int, pause time.Duration) *destinationPause {
+func newDestinationPause() *destinationPause {
 	return &destinationPause{
-		limit: limit,
-		pause: pause,
 		now:   time.Now,
 		state: map[string]destinationTimeouts{},
 	}
 }
 
+// limit and pause are read where they are used, so that the maint api can move
+// them while the proxy runs.
+func (p *destinationPause) limit() int {
+	return int(settings.DestinationTimeoutLimit.Get())
+}
+
+func (p *destinationPause) pause() time.Duration {
+	return time.Duration(settings.DestinationPause.Get()) * time.Millisecond
+}
+
 func (p *destinationPause) off() bool {
-	return p == nil || p.limit <= 0 || p.pause <= 0
+	return p == nil || p.limit() <= 0 || p.pause() <= 0
 }
 
 func (p *destinationPause) paused(storage string) bool {
@@ -81,10 +89,10 @@ func (p *destinationPause) timedOut(storage string) (justPaused bool) {
 	defer p.mu.Unlock()
 	state := p.state[storage]
 	state.count++
-	if state.count >= p.limit {
+	if state.count >= p.limit() {
 		now := p.now()
 		justPaused = !now.Before(state.until)
-		state.until = now.Add(p.pause)
+		state.until = now.Add(p.pause())
 	}
 	p.state[storage] = state
 	return justPaused
