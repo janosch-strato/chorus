@@ -23,11 +23,27 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/clyso/chorus/pkg/settings"
 )
 
 type testClock struct {
 	mu  sync.Mutex
 	now time.Time
+}
+
+// pauseWith builds the pause with the limit and the wait the test wants, which
+// live in the switches.
+func pauseWith(t *testing.T, limit int, pause time.Duration) *destinationPause {
+	t.Helper()
+	prevLimit, prevPause := settings.DestinationTimeoutLimit.Get(), settings.DestinationPause.Get()
+	require.NoError(t, settings.DestinationTimeoutLimit.Set(int64(max(limit, 0))))
+	require.NoError(t, settings.DestinationPause.Set(max(pause.Milliseconds(), 0)))
+	t.Cleanup(func() {
+		require.NoError(t, settings.DestinationTimeoutLimit.Set(prevLimit))
+		require.NoError(t, settings.DestinationPause.Set(prevPause))
+	})
+	return newDestinationPause()
 }
 
 func newTestClock() *testClock {
@@ -49,7 +65,7 @@ func (c *testClock) advance(d time.Duration) {
 func newTestPause(t *testing.T) (*destinationPause, *testClock) {
 	t.Helper()
 	clock := newTestClock()
-	p := newDestinationPause(3, 5*time.Minute)
+	p := pauseWith(t, 3, 5*time.Minute)
 	p.now = clock.Now
 	return p, clock
 }
@@ -150,10 +166,10 @@ func Test_destinationPause(t *testing.T) {
 		r := require.New(t)
 		off := []*destinationPause{
 			nil,
-			newDestinationPause(0, 5*time.Minute),
-			newDestinationPause(-1, 5*time.Minute),
-			newDestinationPause(3, 0),
-			newDestinationPause(3, -1),
+			pauseWith(t, 0, 5*time.Minute),
+			pauseWith(t, -1, 5*time.Minute),
+			pauseWith(t, 3, 0),
+			pauseWith(t, 3, -1),
 		}
 		for _, p := range off {
 			for range 5 {
@@ -167,7 +183,7 @@ func Test_destinationPause(t *testing.T) {
 
 func Test_destinationPause_concurrent(t *testing.T) {
 	r := require.New(t)
-	p := newDestinationPause(3, time.Minute)
+	p := pauseWith(t, 3, time.Minute)
 
 	var paused atomic.Int64
 	var wg sync.WaitGroup

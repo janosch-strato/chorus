@@ -14,7 +14,7 @@ func TestStoragePools(t *testing.T) {
 	const answerStart = 5 * time.Minute
 
 	r := require.New(t)
-	pools := newStoragePools(answerStart)
+	pools := newStoragePools("stor", answerStart)
 
 	t.Run("The two pools are separate", func(t *testing.T) {
 		// A storage hanging on the no-timeout pool must not take the connections
@@ -45,7 +45,7 @@ func TestStoragePools(t *testing.T) {
 
 	// http.Transport would give up on every request at once.
 	t.Run("A negative bound is none", func(t *testing.T) {
-		r.Zero(newStoragePools(-1).shared.ResponseHeaderTimeout,
+		r.Zero(newStoragePools("stor", -1).shared.ResponseHeaderTimeout,
 			"a storage asked for no bound and got one that fires immediately")
 	})
 
@@ -60,7 +60,7 @@ func TestStoragePools(t *testing.T) {
 func TestResponseHeaderTimeoutSpansOnlyTheSilence(t *testing.T) {
 	const bound = 150 * time.Millisecond
 
-	client := &http.Client{Transport: newS3Transport(bound)} // no request timeout, as ours have none
+	client := &http.Client{Transport: newS3Transport("stor", bound)} // no request timeout, as ours have none
 
 	t.Run("An upload slower than it still gets through", func(t *testing.T) {
 		r := require.New(t)

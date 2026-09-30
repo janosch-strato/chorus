@@ -25,7 +25,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hibiken/asynq"
 	"github.com/stretchr/testify/require"
 
 	xctx "github.com/clyso/chorus/pkg/ctx"
@@ -35,7 +34,8 @@ import (
 	"github.com/clyso/chorus/pkg/meta"
 	"github.com/clyso/chorus/pkg/policy"
 	"github.com/clyso/chorus/pkg/s3"
-	"github.com/clyso/chorus/pkg/tasks"
+	"github.com/clyso/chorus/pkg/settings"
+	"github.com/clyso/chorus/pkg/storage"
 	"github.com/clyso/chorus/pkg/testutil"
 )
 
@@ -204,25 +204,24 @@ func TestRouteDeleteObjectVersionDoesNotDropTheMigratedRecord(t *testing.T) {
 		entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket))
 	r.NoError(err)
 
-	queueSvc := &tasks.QueueServiceMock{}
-	rt := &router{
-		clients:             fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) { return nil, false, nil }}},
-		policySvc:           policySvc,
-		versionSvc:          meta.NewVersionService(c),
-		queueSvc:            queueSvc,
-		readFromDestination: true,
-	}
+	storageSvc := storage.New(c)
+	replID := entity.NewReplicationStatusID(testUser, testSource, testBucket, testDest, testBucket)
+	r.NoError(storageSvc.SetMigratedObj(ctx, replID, "obj"))
+	r.NoError(settings.ReadFromDestination.Set(true))
+	t.Cleanup(func() { r.NoError(settings.ReadFromDestination.Set(false)) })
 
-	setCopyState(queueSvc, "obj", asynq.TaskStateCompleted)
-	queue, taskID := migrationCopyTask(testSource, testUser, testBucket, "obj",
-		entity.NewBucketReplicationPolicyDestination(testDest, testBucket))
-	_, seeded := queueSvc.Tasks[queue][taskID]
-	r.True(seeded, "the copy record was not seeded, so this test proves nothing")
+	rt := &router{
+		clients:    fakeClients{c: &fakeClient{do: func(*http.Request) (*http.Response, bool, error) { return nil, false, nil }}},
+		policySvc:  policySvc,
+		versionSvc: meta.NewVersionService(c),
+		storageSvc: storageSvc,
+	}
 
 	_, _, _, _, err = rt.Route(deleteObjectReq("obj", "3HL4kqtGWpM"))
 	r.ErrorIs(err, dom.ErrNotImplemented)
 
-	_, stillThere := queueSvc.Tasks[queue][taskID]
+	stillThere, err := storageSvc.IsMigratedObj(ctx, replID, "obj")
+	r.NoError(err)
 	r.True(stillThere,
 		"the object stopped counting as migrated although nothing was deleted, so reads leave the destination for no reason")
 }

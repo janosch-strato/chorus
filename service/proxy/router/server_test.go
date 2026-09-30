@@ -103,11 +103,11 @@ func TestReplicateOutlivesTheClient(t *testing.T) {
 		"the detached context lost the request's timing, so its redis calls go unmeasured")
 }
 
-type fakeRouter struct {
+type clientGoneRouter struct {
 	route func(*http.Request) (*http.Response, []tasks.SyncTask, string, bool, error)
 }
 
-func (f fakeRouter) Route(r *http.Request) (*http.Response, []tasks.SyncTask, string, bool, error) {
+func (f clientGoneRouter) Route(r *http.Request) (*http.Response, []tasks.SyncTask, string, bool, error) {
 	return f.route(r)
 }
 
@@ -142,7 +142,7 @@ func TestServeClosesTheStorageAnswer(t *testing.T) {
 			r := require.New(t)
 
 			body := &closingBody{Reader: strings.NewReader("answer")}
-			handler := Serve(fakeRouter{route: func(*http.Request) (*http.Response, []tasks.SyncTask, string, bool, error) {
+			handler := Serve(clientGoneRouter{route: func(*http.Request) (*http.Response, []tasks.SyncTask, string, bool, error) {
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       body,

@@ -38,6 +38,7 @@ import (
 	"github.com/clyso/chorus/pkg/replication"
 	"github.com/clyso/chorus/pkg/s3"
 	"github.com/clyso/chorus/pkg/s3client"
+	"github.com/clyso/chorus/pkg/storage"
 	"github.com/clyso/chorus/pkg/tasks"
 	"github.com/clyso/chorus/pkg/testutil"
 )
@@ -108,7 +109,8 @@ func newTestRouter(t *testing.T, client s3client.Client) *router {
 		clients:       fakeClients{c: client},
 		policySvc:     policySvc,
 		versionSvc:    versionSvc,
-		queueSvc:      &tasks.QueueServiceMock{},
+		storageSvc:    storage.New(c),
+		destPause:     newDestinationPause(),
 		replSvc:       replication.New(asynq.NewClientFromRedisClient(c), versionSvc, policySvc),
 		deleteIntents: meta.NewDeleteIntents(c),
 		instanceID:    testInstance,
