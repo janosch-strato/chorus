@@ -108,7 +108,6 @@ func newTestRouter(t *testing.T, client s3client.Client) *router {
 		clients:       fakeClients{c: client},
 		policySvc:     policySvc,
 		versionSvc:    versionSvc,
-		queueSvc:      &tasks.QueueServiceMock{},
 		replSvc:       replication.New(asynq.NewClientFromRedisClient(c), versionSvc, policySvc),
 		deleteIntents: meta.NewDeleteIntents(c),
 		instanceID:    testInstance,
